@@ -1,0 +1,5 @@
+streamlit
+plotly
+pandas
+pandas-ta
+vnstock==0.2.9.2.3
