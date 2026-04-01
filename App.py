@@ -90,21 +90,22 @@ def get_ps_pro_data(resolution_val, days_back, f_ema, s_ema, rsi_l, atr_l, tp1_m
         df['TP3'] = '-'
         df['SL'] = '-'
 
+        # Thêm đuôi .astype(str) để ép kiểu thành chữ, tránh xung đột dữ liệu
         long_idx = df[df['Long_Signal'] == True].index
         if len(long_idx) > 0:
             df.loc[long_idx, 'Tín Hiệu'] = '🟢 LONG'
-            df.loc[long_idx, 'TP1'] = round(df.loc[long_idx, 'close'] + (df.loc[long_idx, 'ATR'] * tp1_m), 1)
-            df.loc[long_idx, 'TP2'] = round(df.loc[long_idx, 'close'] + (df.loc[long_idx, 'ATR'] * tp2_m), 1)
-            df.loc[long_idx, 'TP3'] = round(df.loc[long_idx, 'close'] + (df.loc[long_idx, 'ATR'] * tp3_m), 1)
-            df.loc[long_idx, 'SL'] = round(df.loc[long_idx, 'close'] - (df.loc[long_idx, 'ATR'] * sl_m), 1)
+            df.loc[long_idx, 'TP1'] = round(df.loc[long_idx, 'close'] + (df.loc[long_idx, 'ATR'] * tp1_m), 1).astype(str)
+            df.loc[long_idx, 'TP2'] = round(df.loc[long_idx, 'close'] + (df.loc[long_idx, 'ATR'] * tp2_m), 1).astype(str)
+            df.loc[long_idx, 'TP3'] = round(df.loc[long_idx, 'close'] + (df.loc[long_idx, 'ATR'] * tp3_m), 1).astype(str)
+            df.loc[long_idx, 'SL'] = round(df.loc[long_idx, 'close'] - (df.loc[long_idx, 'ATR'] * sl_m), 1).astype(str)
 
         short_idx = df[df['Short_Signal'] == True].index
         if len(short_idx) > 0:
             df.loc[short_idx, 'Tín Hiệu'] = '🔴 SHORT'
-            df.loc[short_idx, 'TP1'] = round(df.loc[short_idx, 'close'] - (df.loc[short_idx, 'ATR'] * tp1_m), 1)
-            df.loc[short_idx, 'TP2'] = round(df.loc[short_idx, 'close'] - (df.loc[short_idx, 'ATR'] * tp2_m), 1)
-            df.loc[short_idx, 'TP3'] = round(df.loc[short_idx, 'close'] - (df.loc[short_idx, 'ATR'] * tp3_m), 1)
-            df.loc[short_idx, 'SL'] = round(df.loc[short_idx, 'close'] + (df.loc[short_idx, 'ATR'] * sl_m), 1)
+            df.loc[short_idx, 'TP1'] = round(df.loc[short_idx, 'close'] - (df.loc[short_idx, 'ATR'] * tp1_m), 1).astype(str)
+            df.loc[short_idx, 'TP2'] = round(df.loc[short_idx, 'close'] - (df.loc[short_idx, 'ATR'] * tp2_m), 1).astype(str)
+            df.loc[short_idx, 'TP3'] = round(df.loc[short_idx, 'close'] - (df.loc[short_idx, 'ATR'] * tp3_m), 1).astype(str)
+            df.loc[short_idx, 'SL'] = round(df.loc[short_idx, 'close'] + (df.loc[short_idx, 'ATR'] * sl_m), 1).astype(str)
 
         df['RSI'] = df['RSI'].round(2)
         return df
@@ -184,7 +185,7 @@ with tab1:
         
         col_info, col_chart = st.columns([1, 4])
         with col_info:
-            st.subheader("Thông tin")
+            st.subheader("Thông প্রান্ত")
             st.metric(label=f"Giá {symbol}", value=f"{latest_close:,.0f} ₫", delta=f"{change:,.0f} ₫ ({pct_change:.2f}%)")
             st.write(f"**Ngày:** `{df_stock['time'].iloc[-1]}`")
             st.write("---")
