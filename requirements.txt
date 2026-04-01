@@ -1,6 +1,4 @@
 streamlit
 plotly
-pandas<2.2.0
-numpy<2.0.0
-https://github.com/twopirllc/pandas-ta/archive/refs/heads/main.zip
+pandas
 vnstock==0.2.9.2.3
