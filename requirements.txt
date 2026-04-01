@@ -1,5 +1,6 @@
 streamlit
 plotly
 pandas
+numpy<2.0.0
 pandas-ta
 vnstock==0.2.9.2.3
