@@ -46,7 +46,7 @@ def get_stock_data(ticker, days):
         st.sidebar.error(f"Lỗi tải mã {ticker}: {str(e)}")
         return None
 
-# --- HÀM XỬ LÝ DỮ LIỆU PHÁI SINH PRO (TỰ TÍNH TOÁN, KHÔNG DÙNG PANDAS-TA) ---
+# --- HÀM XỬ LÝ DỮ LIỆU PHÁI SINH PRO ---
 @st.cache_data(ttl=60, show_spinner=False)
 def get_ps_pro_data(resolution_val, days_back, f_ema, s_ema, rsi_l, atr_l, tp1_m, tp2_m, tp3_m, sl_m):
     today = datetime.now().strftime("%Y-%m-%d")
@@ -60,25 +60,24 @@ def get_ps_pro_data(resolution_val, days_back, f_ema, s_ema, rsi_l, atr_l, tp1_m
         if len(df) < max(f_ema, s_ema, rsi_l, atr_l):
             return None
 
-        # 1. Tự tính EMA Nhanh và Chậm
+        # Tự tính EMA Nhanh và Chậm
         df['EMA_Fast'] = df['close'].ewm(span=f_ema, adjust=False).mean()
         df['EMA_Slow'] = df['close'].ewm(span=s_ema, adjust=False).mean()
 
-        # 2. Tự tính RSI (Chuẩn RMA của TradingView)
+        # Tự tính RSI
         delta = df['close'].diff()
         gain = delta.where(delta > 0, 0.0).ewm(alpha=1/rsi_l, adjust=False).mean()
         loss = (-delta.where(delta < 0, 0.0)).ewm(alpha=1/rsi_l, adjust=False).mean()
         rs = gain / loss
         df['RSI'] = 100 - (100 / (1 + rs))
 
-        # 3. Tự tính ATR (Chuẩn RMA của TradingView)
+        # Tự tính ATR
         tr1 = df['high'] - df['low']
         tr2 = (df['high'] - df['close'].shift(1)).abs()
         tr3 = (df['low'] - df['close'].shift(1)).abs()
         tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
         df['ATR'] = tr.ewm(alpha=1/atr_l, adjust=False).mean()
 
-        # Điều kiện Signal
         df['EMA_Fast_Prev'] = df['EMA_Fast'].shift(1)
         df['EMA_Slow_Prev'] = df['EMA_Slow'].shift(1)
 
@@ -91,7 +90,6 @@ def get_ps_pro_data(resolution_val, days_back, f_ema, s_ema, rsi_l, atr_l, tp1_m
         df['TP3'] = '-'
         df['SL'] = '-'
 
-        # Áp dụng TP/SL LONG
         long_idx = df[df['Long_Signal'] == True].index
         if len(long_idx) > 0:
             df.loc[long_idx, 'Tín Hiệu'] = '🟢 LONG'
@@ -100,7 +98,6 @@ def get_ps_pro_data(resolution_val, days_back, f_ema, s_ema, rsi_l, atr_l, tp1_m
             df.loc[long_idx, 'TP3'] = round(df.loc[long_idx, 'close'] + (df.loc[long_idx, 'ATR'] * tp3_m), 1)
             df.loc[long_idx, 'SL'] = round(df.loc[long_idx, 'close'] - (df.loc[long_idx, 'ATR'] * sl_m), 1)
 
-        # Áp dụng TP/SL SHORT
         short_idx = df[df['Short_Signal'] == True].index
         if len(short_idx) > 0:
             df.loc[short_idx, 'Tín Hiệu'] = '🔴 SHORT'
@@ -112,12 +109,13 @@ def get_ps_pro_data(resolution_val, days_back, f_ema, s_ema, rsi_l, atr_l, tp1_m
         df['RSI'] = df['RSI'].round(2)
         return df
     except Exception as e:
-        return f"LỖI: {str(e)}"
+        return f"LỖI API: {str(e)}"
 
 # --- HÀM HIỂN THỊ GIAO DIỆN PHÁI SINH ---
 def render_ps_bot(df_ps, timeframe_name):
     if isinstance(df_ps, str):
-        st.error(f"Lỗi hệ thống: {df_ps}")
+        st.error(f"Hệ thống API tải dữ liệu phái sinh đang quá tải. Chi tiết: {df_ps}")
+        st.info("💡 Mẹo: Nhấn nút 'Cập nhật dữ liệu mới nhất' ở thanh menu bên trái để thử lại.")
         return
 
     if df_ps is not None and not df_ps.empty:
@@ -167,3 +165,47 @@ def render_ps_bot(df_ps, timeframe_name):
         
         st.write("---")
         st.subheader(f"Bảng dữ liệu 20 nến gần nhất ({timeframe_name})")
+        display_df = df_ps[['time', 'open', 'high', 'low', 'close', 'RSI', 'Tín Hiệu', 'TP1', 'TP2', 'TP3', 'SL']].tail(20)
+        st.dataframe(display_df, use_container_width=True)
+    else:
+        st.warning("Không có dữ liệu trả về từ API. Có thể ngoài giờ giao dịch.")
+
+# --- TẠO 3 TABS GIAO DIỆN CHÍNH ---
+tab1, tab2, tab3 = st.tabs(["📈 CƠ SỞ", "👑 PS PRO (1 Phút)", "👑 PS PRO (5 Phút)"])
+
+# TAB 1: CỔ PHIẾU CƠ SỞ
+with tab1:
+    df_stock = get_stock_data(symbol, days_to_lookback)
+    if df_stock is not None and len(df_stock) >= 2:
+        latest_close = df_stock['close'].iloc[-1]
+        prev_close = df_stock['close'].iloc[-2]
+        change = latest_close - prev_close
+        pct_change = (change / prev_close) * 100
+        
+        col_info, col_chart = st.columns([1, 4])
+        with col_info:
+            st.subheader("Thông tin")
+            st.metric(label=f"Giá {symbol}", value=f"{latest_close:,.0f} ₫", delta=f"{change:,.0f} ₫ ({pct_change:.2f}%)")
+            st.write(f"**Ngày:** `{df_stock['time'].iloc[-1]}`")
+            st.write("---")
+            st.write("**Bảng 20 phiên gần nhất:**")
+            st.dataframe(df_stock[['time', 'close']].tail(20), use_container_width=True)
+            
+        with col_chart:
+            st.subheader(f"Biểu đồ kỹ thuật: {symbol}")
+            fig = go.Figure(data=[go.Candlestick(x=df_stock['time'], open=df_stock['open'], high=df_stock['high'], low=df_stock['low'], close=df_stock['close'], name=symbol)])
+            fig.update_layout(height=550, xaxis_rangeslider_visible=False, template="plotly_dark", margin=dict(l=0, r=0, t=30, b=0))
+            st.plotly_chart(fig, use_container_width=True)
+    else: 
+        st.error("Lỗi dữ liệu cổ phiếu cơ sở hoặc đang bị từ chối truy cập API.")
+
+# TAB 2 & 3: PHÁI SINH PRO
+with tab2:
+    st.subheader("Hệ thống Bot VN30F1M - Khung 1 Phút (Bản PRO)")
+    df_1m_pro = get_ps_pro_data('1', 5, lenFast, lenSlow, lenRsi, lenAtr, tp1_mult, tp2_mult, tp3_mult, sl_mult)
+    render_ps_bot(df_1m_pro, "1 Phút PRO")
+
+with tab3:
+    st.subheader("Hệ thống Bot VN30F1M - Khung 5 Phút (Bản PRO)")
+    df_5m_pro = get_ps_pro_data('5', 14, lenFast, lenSlow, lenRsi, lenAtr, tp1_mult, tp2_mult, tp3_mult, sl_mult)
+    render_ps_bot(df_5m_pro, "5 Phút PRO")
