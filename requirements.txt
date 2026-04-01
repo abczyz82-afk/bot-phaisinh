@@ -1,4 +1,6 @@
 streamlit
 plotly
 pandas
+beautifulsoup4
+requests
 vnstock==0.2.9.2.3
