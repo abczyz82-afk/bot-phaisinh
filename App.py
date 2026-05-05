@@ -111,42 +111,39 @@ def get_ps_pro_data(resolution_val, days_back, f_ema, s_ema, rsi_l, atr_l, tp1_m
         return df
     except Exception as e:
         return f"LỖI API: {str(e)}"
-# --- HÀM HIỂN THỊ THỐNG KÊ DÒNG TIỀN PHÁI SINH ---
-def render_market_flow():
-    st.subheader("📊 Thống kê Dòng tiền Phái Sinh")
+
+# --- THUẬT TOÁN TÍNH TOÁN DÒNG TIỀN KHỐI NGOẠI ---
+def calculate_foreign_flow(current_price, historical_daily_data):
+    total_hold_vol = 0
+    total_capital = 0  
     
-    # Dữ liệu mẫu (Mock Data) - Bạn có thể thay bằng API thật nếu có
-    data = {
-        "date": "4/5/2026",
-        "foreign": {"net": -1644, "net_type": "Short", "daily_pnl": 6.9, "hold_vol": 4049, "hold_type": "Long", "avg_price": 1970.0, "month_pnl": 63.7},
-        "prop": {"net": 405, "net_type": "Long", "daily_pnl": -2.1, "hold_vol": -1948, "hold_type": "Short", "avg_price": 1962.1, "month_pnl": -9.6},
-        "retail": {"net": 1237, "net_type": "Long", "daily_pnl": -4.8, "hold_vol": -2097, "hold_type": "Short", "avg_price": 1962.6, "month_pnl": -54.2}
+    for day in historical_daily_data:
+        net_vol = day['buy_vol'] - day['sell_vol'] 
+        vwap = day['vwap'] 
+        total_hold_vol += net_vol
+        total_capital += (net_vol * vwap)
+        
+    avg_hold_price = total_capital / total_hold_vol if total_hold_vol != 0 else 0
+    hold_type = "Long" if total_hold_vol > 0 else "Short"
+    
+    estimated_pnl_vnd = (current_price - avg_hold_price) * total_hold_vol * 100000
+    estimated_pnl_ty = estimated_pnl_vnd / 1000000000  
+    
+    today_data = historical_daily_data[-1]
+    today_net_vol = today_data['buy_vol'] - today_data['sell_vol']
+    today_net_type = "Long" if today_net_vol > 0 else "Short"
+    today_pnl = (current_price - today_data['vwap']) * today_net_vol * 100000 / 1000000000
+
+    return {
+        "today_net_vol": today_net_vol,
+        "today_net_type": today_net_type,
+        "today_pnl_ty": round(today_pnl, 1),
+        "hold_vol": total_hold_vol,
+        "hold_type": hold_type,
+        "avg_hold_price": round(avg_hold_price, 1),
+        "month_pnl_ty": round(estimated_pnl_ty, 1)
     }
 
-    st.write(f"**Phái Sinh ngày {data['date']}**")
-    
-    # --- Khối Ngoại (Tây) ---
-    f_icon = "🔴" if data['foreign']['net_type'] == "Short" else "🟢"
-    st.markdown(f"""
-    {f_icon} **Hnay Tây {data['foreign']['net_type']} ròng :** {data['foreign']['net']}HĐ ; lãi (lướt)/ngày : {data['foreign']['daily_pnl']} tỷ.  
-    **Hold:** {data['foreign']['hold_vol']} {data['foreign']['hold_type']}, giá vốn {data['foreign']['avg_price']}. Ước tính Lãi tháng này (Lướt+ Hold) **{data['foreign']['month_pnl']} tỷ**;
-    """)
-    st.markdown("---")
-
-    # --- Tự Doanh (TD) ---
-    p_icon = "🔴" if data['prop']['net_type'] == "Short" else "✅"
-    st.markdown(f"""
-    {p_icon} **Hnay TD {data['prop']['net_type']} :** {data['prop']['net']}HĐ ; lỗ/ngày : {data['prop']['daily_pnl']} tỷ.  
-    **Hold:** {data['prop']['hold_vol']} {data['prop']['hold_type']}, giá vốn {data['prop']['avg_price']}. Ước tính Lỗ tháng này (Lướt+ Hold) **{data['prop']['month_pnl']} tỷ**;
-    """)
-    st.markdown("---")
-
-    # --- Nhỏ lẻ (CN) ---
-    r_icon = "🔴" if data['retail']['net_type'] == "Short" else "✅"
-    st.markdown(f"""
-    {r_icon} **Hnay CN Nhỏ lẻ # {data['retail']['net_type']} :** {data['retail']['net']}HĐ ; lỗ/ngày : {data['retail']['daily_pnl']} tỷ.  
-    **Hold:** {data['retail']['hold_vol']} {data['retail']['hold_type']}, giá vốn {data['retail']['avg_price']}. Ước tính Lỗ tháng này (Lướt+ Hold) **{data['retail']['month_pnl']} tỷ**;
-    """)
 # --- HÀM HIỂN THỊ GIAO DIỆN PHÁI SINH ---
 def render_ps_bot(df_ps, timeframe_name):
     if isinstance(df_ps, str):
@@ -206,8 +203,52 @@ def render_ps_bot(df_ps, timeframe_name):
     else:
         st.warning("Không có dữ liệu trả về từ API. Có thể ngoài giờ giao dịch.")
 
-# --- TẠO 3 TABS GIAO DIỆN CHÍNH ---
-tab1, tab2, tab3 = st.tabs(["📈 CƠ SỞ", "👑 PS PRO (1 Phút)", "👑 PS PRO (5 Phút)"])
+# --- HÀM HIỂN THỊ THỐNG KÊ DÒNG TIỀN PHÁI SINH ---
+def render_market_flow(current_ps_price):
+    st.subheader("📊 Thống kê Dòng tiền Phái Sinh")
+    
+    # 1. TÍNH TOÁN DỮ LIỆU KHỐI NGOẠI (Dùng code để tính toán thực tế)
+    foreign_data_history = [
+        {"date": "02/05", "buy_vol": 5000, "sell_vol": 3000, "vwap": 1230.5},
+        {"date": "03/05", "buy_vol": 4000, "sell_vol": 2000, "vwap": 1240.0},
+        {"date": "04/05", "buy_vol": 1000, "sell_vol": 2644, "vwap": 1245.5}, 
+    ]
+    f_result = calculate_foreign_flow(current_ps_price, foreign_data_history)
+    
+    # 2. DỮ LIỆU MOCK CHO TỰ DOANH VÀ NHỎ LẺ (Chưa có API thực)
+    data = {
+        "date": datetime.now().strftime("%d/%m/%Y"),
+        "prop": {"net": 405, "net_type": "Long", "daily_pnl": -2.1, "hold_vol": -1948, "hold_type": "Short", "avg_price": 1962.1, "month_pnl": -9.6},
+        "retail": {"net": 1237, "net_type": "Long", "daily_pnl": -4.8, "hold_vol": -2097, "hold_type": "Short", "avg_price": 1962.6, "month_pnl": -54.2}
+    }
+
+    st.write(f"**Phái Sinh ngày {data['date']} (Cập nhật Real-time Lãi/Lỗ theo giá: {current_ps_price})**")
+    
+    # --- Khối Ngoại (Tây) --- Dùng dữ liệu thật đã tính
+    f_icon = "🔴" if f_result['today_net_type'] == "Short" else "🟢"
+    st.markdown(f"""
+    {f_icon} **Hnay Tây {f_result['today_net_type']} ròng :** {f_result['today_net_vol']}HĐ ; lãi (lướt)/ngày : {f_result['today_pnl_ty']} tỷ.  
+    **Hold:** {f_result['hold_vol']} {f_result['hold_type']}, giá vốn {f_result['avg_hold_price']}. Ước tính Lãi tháng này (Lướt+ Hold) **{f_result['month_pnl_ty']} tỷ**;
+    """)
+    st.markdown("---")
+
+    # --- Tự Doanh (TD) ---
+    p_icon = "🔴" if data['prop']['net_type'] == "Short" else "✅"
+    st.markdown(f"""
+    {p_icon} **Hnay TD {data['prop']['net_type']} :** {data['prop']['net']}HĐ ; lỗ/ngày : {data['prop']['daily_pnl']} tỷ.  
+    **Hold:** {data['prop']['hold_vol']} {data['prop']['hold_type']}, giá vốn {data['prop']['avg_price']}. Ước tính Lỗ tháng này (Lướt+ Hold) **{data['prop']['month_pnl']} tỷ**;
+    """)
+    st.markdown("---")
+
+    # --- Nhỏ lẻ (CN) ---
+    r_icon = "🔴" if data['retail']['net_type'] == "Short" else "✅"
+    st.markdown(f"""
+    {r_icon} **Hnay CN Nhỏ lẻ # {data['retail']['net_type']} :** {data['retail']['net']}HĐ ; lỗ/ngày : {data['retail']['daily_pnl']} tỷ.  
+    **Hold:** {data['retail']['hold_vol']} {data['retail']['hold_type']}, giá vốn {data['retail']['avg_price']}. Ước tính Lỗ tháng này (Lướt+ Hold) **{data['retail']['month_pnl']} tỷ**;
+    """)
+
+# --- TẠO 4 TABS GIAO DIỆN CHÍNH ---
+tab1, tab2, tab3, tab4 = st.tabs(["📈 CƠ SỞ", "👑 PS PRO (1 Phút)", "👑 PS PRO (5 Phút)", "📊 DÒNG TIỀN"])
 
 # TAB 1: CỔ PHIẾU CƠ SỞ
 with tab1:
@@ -220,7 +261,7 @@ with tab1:
         
         col_info, col_chart = st.columns([1, 4])
         with col_info:
-            st.subheader("Thông প্রান্ত")
+            st.subheader("Thông tin")
             st.metric(label=f"Giá {symbol}", value=f"{latest_close:,.0f} ₫", delta=f"{change:,.0f} ₫ ({pct_change:.2f}%)")
             st.write(f"**Ngày:** `{df_stock['time'].iloc[-1]}`")
             st.write("---")
@@ -245,82 +286,14 @@ with tab3:
     st.subheader("Hệ thống Bot VN30F1M - Khung 5 Phút (Bản PRO)")
     df_5m_pro = get_ps_pro_data('5', 14, lenFast, lenSlow, lenRsi, lenAtr, tp1_mult, tp2_mult, tp3_mult, sl_mult)
     render_ps_bot(df_5m_pro, "5 Phút PRO")
-import pandas as pd
-
-def calculate_foreign_flow(current_price, historical_daily_data):
-    """
-    Thuật toán ước tính Giá vốn và Lãi/Lỗ của Khối ngoại.
-    Hệ số nhân của 1 Hợp đồng VN30F1M là 100,000 VNĐ.
-    """
-    total_hold_vol = 0
-    total_capital = 0  # Tổng giá trị vốn
-    
-    # 1. Tính toán Vị thế Hold và Giá vốn (Tính từ đầu kỳ hạn hợp đồng)
-    for day in historical_daily_data:
-        net_vol = day['buy_vol'] - day['sell_vol'] # Khối lượng ròng trong ngày
-        vwap = day['vwap'] # Giá trung bình trong ngày
-        
-        total_hold_vol += net_vol
-        total_capital += (net_vol * vwap)
-        
-    # Giá vốn trung bình = Tổng vốn / Tổng khối lượng
-    avg_hold_price = total_capital / total_hold_vol if total_hold_vol != 0 else 0
-    hold_type = "Long" if total_hold_vol > 0 else "Short"
-    
-    # 2. Tính toán Lãi/Lỗ ước tính trong tháng (Lướt + Hold)
-    # Công thức PnL = (Giá hiện tại - Giá vốn) * Khối lượng Hold * Hệ số nhân 100k
-    # Lưu ý: Nếu Hold Short (total_hold_vol < 0) thì công thức vẫn đúng vì số âm sẽ đảo chiều kết quả.
-    estimated_pnl_vnd = (current_price - avg_hold_price) * total_hold_vol * 100000
-    estimated_pnl_ty = estimated_pnl_vnd / 1000000000  # Đổi ra đơn vị Tỷ VNĐ
-    
-    # 3. Lấy dữ liệu ngày hôm nay (ngày cuối cùng trong mảng)
-    today_data = historical_daily_data[-1]
-    today_net_vol = today_data['buy_vol'] - today_data['sell_vol']
-    today_net_type = "Long" if today_net_vol > 0 else "Short"
-    
-    # Ước tính lãi/lỗ lướt sóng trong ngày của họ
-    today_pnl = (current_price - today_data['vwap']) * today_net_vol * 100000 / 1000000000
-
-    # 4. Trả về kết quả
-    return {
-        "today_net_vol": today_net_vol,
-        "today_net_type": today_net_type,
-        "today_pnl_ty": round(today_pnl, 1),
-        "hold_vol": total_hold_vol,
-        "hold_type": hold_type,
-        "avg_hold_price": round(avg_hold_price, 1),
-        "month_pnl_ty": round(estimated_pnl_ty, 1)
-    }
-
-# ==========================================
-# CÁCH SỬ DỤNG TRONG THỰC TẾ
-# ==========================================
-
-# Giả sử hôm nay giá VN30F1M đang đóng cửa ở mức 1250.0
-current_ps_price = 1250.0
-
-# Đây là dữ liệu bạn thu thập từ đầu tháng (sau ngày đáo hạn trước)
-# Bạn có thể lấy tay từ bảng giá SSI/VNDirect lúc cuối ngày
-foreign_data_history = [
-    {"date": "02/05", "buy_vol": 5000, "sell_vol": 3000, "vwap": 1230.5}, # Mua ròng 2000
-    {"date": "03/05", "buy_vol": 4000, "sell_vol": 2000, "vwap": 1240.0}, # Mua ròng 2000
-    {"date": "04/05", "buy_vol": 1000, "sell_vol": 2644, "vwap": 1245.5}, # Hôm nay bán ròng -1644
-]
-
-# Chạy thuật toán
-result = calculate_foreign_flow(current_ps_price, foreign_data_history)
-
-print("--- THỐNG KÊ KHỐI NGOẠI ---")
-print(f"Hnay Tây {result['today_net_type']} ròng: {result['today_net_vol']} HĐ ; lãi (lướt)/ngày: {result['today_pnl_ty']} tỷ.")
-print(f"Hold: {result['hold_vol']} {result['hold_type']}, giá vốn {result['avg_hold_price']}.")
-print(f"Ước tính Lãi/Lỗ tháng này: {result['month_pnl_ty']} tỷ.")
-# --- TẠO 4 TABS GIAO DIỆN CHÍNH ---
-tab1, tab2, tab3, tab4 = st.tabs(["📈 CƠ SỞ", "👑 PS PRO (1 Phút)", "👑 PS PRO (5 Phút)", "📊 DÒNG TIỀN"])
-
-# (Giữ nguyên code của TAB 1, TAB 2, TAB 3)
-# ... code cũ ...
 
 # TAB 4: THỐNG KÊ DÒNG TIỀN
 with tab4:
-    render_market_flow()
-    st.info("💡 Lưu ý: Đây là giao diện hiển thị dữ liệu dòng tiền mẫu. Để có số liệu thực tế, cần kết nối với API cung cấp dữ liệu định lượng chuyên sâu (FiinTrade, Wichart...) hoặc tự viết thuật toán cào dữ liệu (crawl) từ Sở Giao Dịch mỗi cuối ngày.")
+    # Cố gắng lấy giá phái sinh hiện tại từ Tab 1 Phút (nếu có) để tính Lãi/Lỗ trực tiếp
+    current_ps_price = 1250.0  # Giá mặc định phòng khi API lỗi
+    if 'df_1m_pro' in locals() and isinstance(df_1m_pro, pd.DataFrame) and not df_1m_pro.empty:
+        current_ps_price = df_1m_pro.iloc[-1]['close']
+        
+    render_market_flow(current_ps_price)
+    
+    st.info("💡 Lưu ý: Hệ thống đang chạy bằng thuật toán tính toán Real-time giá vốn dựa trên tập dữ liệu Khối ngoại mô phỏng. Để có số liệu thực tế chính xác từng ngày, bạn hãy nhập tay dữ liệu Mua/Bán/VWAP vào list `foreign_data_history` bên trong hàm `render_market_flow` mỗi cuối ngày.")
