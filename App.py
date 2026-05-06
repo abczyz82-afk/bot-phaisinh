@@ -1,4 +1,4 @@
-import streamlit as st
+]import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -82,29 +82,45 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["macd_signal"] = ema(np.nan_to_num(df["macd"].values), 9)
     df["macd_hist"] = df["macd"] - df["macd_signal"]
 
-    # --- LƯU CÁC SỰ KIỆN CẮT NHAU VÀO DATAFRAME ĐỂ VẼ BIỂU ĐỒ ---
+    # --- SỬA LỖI TÍNH TOÁN ADX BẰNG VECTOR HÓA PANDAS ---
+    df['prev_close'] = df['close'].shift(1)
+    df['tr1'] = df['high'] - df['low']
+    df['tr2'] = (df['high'] - df['prev_close']).abs()
+    df['tr3'] = (df['low'] - df['prev_close']).abs()
+    df['tr'] = df[['tr1', 'tr2', 'tr3']].max(axis=1)
+
+    df['up_move'] = df['high'] - df['high'].shift(1)
+    df['down_move'] = df['low'].shift(1) - df['low']
+    df['+dm'] = np.where((df['up_move'] > df['down_move']) & (df['up_move'] > 0), df['up_move'], 0)
+    df['-dm'] = np.where((df['down_move'] > df['up_move']) & (df['down_move'] > 0), df['down_move'], 0)
+
+    # Wilder's Smoothing bằng Exponential Moving Average (alpha=1/period)
+    rma = lambda s, p: s.ewm(alpha=1/p, min_periods=p, adjust=False).mean()
+    
+    df['atr14'] = rma(df['tr'], 14)
+    df['+dm14'] = rma(df['+dm'], 14)
+    df['-dm14'] = rma(df['-dm'], 14)
+
+    df['di_pos'] = 100 * (df['+dm14'] / df['atr14'])
+    df['di_neg'] = 100 * (df['-dm14'] / df['atr14'])
+    df['dx'] = 100 * (df['di_pos'] - df['di_neg']).abs() / (df['di_pos'] + df['di_neg'])
+    df['adx'] = rma(df['dx'], 14)
+
+    # Dọn dẹp cột tạm thời
+    df.drop(['prev_close', 'tr1', 'tr2', 'tr3', 'tr', 'up_move', 'down_move', '+dm', '-dm', '+dm14', '-dm14', 'atr14', 'dx'], axis=1, inplace=True)
+    # ----------------------------------------------------
+
+    # LƯU CÁC SỰ KIỆN CẮT NHAU VÀO DATAFRAME ĐỂ VẼ BIỂU ĐỒ
     df["ema_buy"] = (df["ema9"] > df["ema21"]) & (df["ema9"].shift(1) <= df["ema21"].shift(1))
     df["ema_sell"] = (df["ema9"] < df["ema21"]) & (df["ema9"].shift(1) >= df["ema21"].shift(1))
     df["macd_buy"] = (df["macd_hist"] > 0) & (df["macd_hist"].shift(1) <= 0)
     df["macd_sell"] = (df["macd_hist"] < 0) & (df["macd_hist"].shift(1) >= 0)
     df["bb_break_up"] = (df["close"] > df["bb_upper"]) & (df["close"].shift(1) <= df["bb_upper"].shift(1))
     df["bb_break_dn"] = (df["close"] < df["bb_lower"]) & (df["close"].shift(1) >= df["bb_lower"].shift(1))
-
-    tr, dmp, dmm = np.zeros(n), np.zeros(n), np.zeros(n)
-    for i in range(1, n):
-        tr[i]  = max(h[i]-l[i], abs(h[i]-c[i-1]), abs(l[i]-c[i-1]))
-        dmp[i] = max(h[i]-h[i-1], 0) if (h[i]-h[i-1]) > (l[i-1]-l[i]) else 0
-        dmm[i] = max(l[i-1]-l[i], 0) if (l[i-1]-l[i]) > (h[i]-h[i-1]) else 0
-
-    def wilder(arr, p):
-        out = np.full(len(arr), np.nan); out[p] = sum(arr[1:p+1])
-        for i in range(p+1, len(arr)): out[i] = out[i-1] - out[i-1]/p + arr[i]
-        return out
-
-    atr14, dmp14, dmm14  = wilder(tr, 14), wilder(dmp, 14), wilder(dmm, 14)
-    di_pos, di_neg = 100 * dmp14 / np.where(atr14==0, 1, atr14), 100 * dmm14 / np.where(atr14==0, 1, atr14)
-    df["adx"] = wilder(100 * np.abs(di_pos - di_neg) / np.where((di_pos+di_neg)==0, 1, (di_pos+di_neg)), 14)
-    df["di_pos"], df["di_neg"], df["vol_ma"] = di_pos, di_neg, pd.Series(df["volume"].values).rolling(20).mean().values
+    df["buy_signal"] = df["ema_buy"] & (df["rsi"] > 40)
+    df["sell_signal"] = df["ema_sell"] & (df["rsi"] < 60)
+    
+    df["vol_ma"] = pd.Series(df["volume"].values).rolling(20).mean().values
     return df
 
 # ─────────────────────────────────────────────
@@ -112,7 +128,7 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
 # ─────────────────────────────────────────────
 def get_signal_history(df: pd.DataFrame, tf_label: str) -> list:
     history = []
-    recent_df = df.iloc[-150:] # Lấy 150 nến gần nhất (khoảng 1 buổi giao dịch)
+    recent_df = df.iloc[-150:] 
     for i in range(1, len(recent_df)):
         row = recent_df.iloc[i]
         t_obj = recent_df.index[i]
@@ -120,10 +136,8 @@ def get_signal_history(df: pd.DataFrame, tf_label: str) -> list:
 
         if row['ema_buy']: history.append({"_ts": t_obj, "Thời gian": t_str, "Khung": tf_label, "Chỉ báo": "EMA 9/21", "Tín hiệu": "🟢 CẮT LÊN (LONG)"})
         elif row['ema_sell']: history.append({"_ts": t_obj, "Thời gian": t_str, "Khung": tf_label, "Chỉ báo": "EMA 9/21", "Tín hiệu": "🔴 CẮT XUỐNG (SHORT)"})
-
         if row['macd_buy']: history.append({"_ts": t_obj, "Thời gian": t_str, "Khung": tf_label, "Chỉ báo": "MACD Histogram", "Tín hiệu": "🟢 ĐẢO CHIỀU TĂNG"})
         elif row['macd_sell']: history.append({"_ts": t_obj, "Thời gian": t_str, "Khung": tf_label, "Chỉ báo": "MACD Histogram", "Tín hiệu": "🔴 ĐẢO CHIỀU GIẢM"})
-        
         if row['bb_break_up']: history.append({"_ts": t_obj, "Thời gian": t_str, "Khung": tf_label, "Chỉ báo": "Bollinger Bands", "Tín hiệu": "🚀 BREAK CẠNH TRÊN"})
         elif row['bb_break_dn']: history.append({"_ts": t_obj, "Thời gian": t_str, "Khung": tf_label, "Chỉ báo": "Bollinger Bands", "Tín hiệu": "💥 BREAK CẠNH DƯỚI"})
     return history
@@ -164,7 +178,7 @@ def detect_regime(df: pd.DataFrame) -> dict:
 COLORS = {"bg": "#0a0e1a", "grid": "#1e2d4a", "candle_up":"#00e676", "candle_dn":"#ff5252", "bb": "#475569", "bb_fill": "rgba(71,85,105,0.08)"}
 
 def build_chart(df: pd.DataFrame, title: str, show_ema: bool, show_bb: bool, show_signals: bool, show_trades: bool) -> go.Figure:
-    df = df.copy().dropna(subset=["ema21"]).iloc[-300:] # HIỂN THỊ 300 NẾN
+    df = df.copy().dropna(subset=["ema21"]).iloc[-300:] 
     fig = make_subplots(rows=4, cols=1, shared_xaxes=True, row_heights=[0.52, 0.15, 0.17, 0.16], vertical_spacing=0.01)
 
     fig.add_trace(go.Candlestick(x=df.index, open=df["open"], high=df["high"], low=df["low"], close=df["close"],
@@ -180,11 +194,9 @@ def build_chart(df: pd.DataFrame, title: str, show_ema: bool, show_bb: bool, sho
             fig.add_trace(go.Scatter(x=df.index, y=df[col], line=dict(color=color, width=1.5), name=lbl), row=1, col=1)
 
     if show_signals:
-        # TÍN HIỆU EMA
         buys_ema, sells_ema = df[df["ema_buy"]], df[df["ema_sell"]]
         if not buys_ema.empty: fig.add_trace(go.Scatter(x=buys_ema.index, y=buys_ema["low"] - 1.5, mode="markers", marker=dict(symbol="triangle-up", size=13, color="#00e676"), name="EMA MUA"), row=1, col=1)
         if not sells_ema.empty: fig.add_trace(go.Scatter(x=sells_ema.index, y=sells_ema["high"] + 1.5, mode="markers", marker=dict(symbol="triangle-down", size=13, color="#ff5252"), name="EMA BÁN"), row=1, col=1)
-        # TÍN HIỆU MACD
         buys_macd, sells_macd = df[df["macd_buy"]], df[df["macd_sell"]]
         if not buys_macd.empty: fig.add_trace(go.Scatter(x=buys_macd.index, y=buys_macd["low"] - 3.5, mode="markers", marker=dict(symbol="triangle-up", size=10, color="#38bdf8"), name="MACD MUA"), row=1, col=1)
         if not sells_macd.empty: fig.add_trace(go.Scatter(x=sells_macd.index, y=sells_macd["high"] + 3.5, mode="markers", marker=dict(symbol="triangle-down", size=10, color="#f59e0b"), name="MACD BÁN"), row=1, col=1)
@@ -322,7 +334,6 @@ st.markdown("<br>", unsafe_allow_html=True)
 # --- 4. BIỂU ĐỒ & PANEL VÀO LỆNH ---
 chart_col, trade_col = st.columns([3, 1.1])
 with chart_col:
-    # 🌟 THÊM TAB 3: NHẬT KÝ TÍN HIỆU BOT 🌟
     tab1, tab5, tab_signals = st.tabs(["📊 Biểu đồ 1 Phút", "📊 Biểu đồ 5 Phút", "🔔 Nhật Ký Tín Hiệu Bot"])
     with tab1: st.plotly_chart(build_chart(df1, f"{symbol} · 1P", show_ema, show_bb, show_signals, show_trades), use_container_width=True, config={"displayModeBar": False})
     with tab5: st.plotly_chart(build_chart(df5, f"{symbol} · 5P", show_ema, show_bb, show_signals, show_trades), use_container_width=True, config={"displayModeBar": False})
@@ -333,9 +344,8 @@ with chart_col:
         h_5m = get_signal_history(df5, "5 Phút")
         all_hist = h_1m + h_5m
         if all_hist:
-            # Sắp xếp theo mốc thời gian thực tế mới nhất lên đầu
             all_hist.sort(key=lambda x: x["_ts"], reverse=True)
-            for item in all_hist: del item["_ts"] # Xóa cột thời gian nháp
+            for item in all_hist: del item["_ts"]
             st.dataframe(pd.DataFrame(all_hist), use_container_width=True, hide_index=True)
         else:
             st.info("Chưa có sự kiện giao cắt tín hiệu (EMA/MACD/Breakout) nào diễn ra gần đây.")
