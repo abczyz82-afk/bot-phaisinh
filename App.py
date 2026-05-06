@@ -141,7 +141,9 @@ def detect_regime(df: pd.DataFrame) -> dict:
 COLORS = {"bg": "#0a0e1a", "grid": "#1e2d4a", "candle_up":"#00e676", "candle_dn":"#ff5252", "bb": "#475569", "bb_fill": "rgba(71,85,105,0.08)"}
 
 def build_chart(df: pd.DataFrame, title: str, show_ema: bool, show_bb: bool, show_signals: bool, show_trades: bool) -> go.Figure:
-    df = df.copy().dropna(subset=["ema21"]).iloc[-100:]
+    # --- ĐÃ MỞ RỘNG GÓC NHÌN LÊN 300 NẾN ---
+    df = df.copy().dropna(subset=["ema21"]).iloc[-300:] 
+    
     fig = make_subplots(rows=4, cols=1, shared_xaxes=True, row_heights=[0.52, 0.15, 0.17, 0.16], vertical_spacing=0.01)
 
     fig.add_trace(go.Candlestick(x=df.index, open=df["open"], high=df["high"], low=df["low"], close=df["close"],
@@ -320,7 +322,6 @@ with trade_col:
     if not open_trades_exist:
         st.markdown("<div style='color:#475569;font-size:12px;font-family:JetBrains Mono'>Chưa có lệnh nào đang mở.</div>", unsafe_allow_html=True)
 
-    # LỊCH SỬ LỆNH ĐÃ ĐÓNG (GẮN Ở CỘT BÊN PHẢI)
     st.markdown('<div class="section-header" style="margin-top:20px">📜 LỊCH SỬ LỆNH ĐÃ ĐÓNG</div>', unsafe_allow_html=True)
     closed_trades = [t for t in st.session_state.trade_history if t["status"] == "CLOSED"]
     
