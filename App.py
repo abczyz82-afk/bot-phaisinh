@@ -34,6 +34,7 @@ section[data-testid="stSidebar"] * { color: #c9d5e8 !important; }
 #MainMenu, footer, header { visibility: hidden; }
 .block-container { padding-top: 1rem; padding-bottom: 1rem; }
 .stSelectbox > div > div, .stNumberInput > div > div > input { background: #111827; border-color: #1e2d4a; color: #e2e8f0; }
+div[data-testid="stDataFrame"] { font-family: 'JetBrains Mono', monospace; font-size: 13px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -58,7 +59,7 @@ def fetch_real_ohlcv(symbol: str, tf_minutes: int, days_back: int = 5) -> pd.Dat
         return pd.DataFrame()
 
 # ─────────────────────────────────────────────
-# TÍNH TOÁN TẤT CẢ CHỈ BÁO 
+# TÍNH TOÁN TẤT CẢ CHỈ BÁO & TẠO ĐIỂM CẮT
 # ─────────────────────────────────────────────
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     c, h, l, n = df["close"].values, df["high"].values, df["low"].values, len(df)
@@ -81,8 +82,13 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["macd_signal"] = ema(np.nan_to_num(df["macd"].values), 9)
     df["macd_hist"] = df["macd"] - df["macd_signal"]
 
-    df["buy_signal"] = (df["ema9"] > df["ema21"]) & (df["ema9"].shift(1) <= df["ema21"].shift(1)) & (df["rsi"] > 40)
-    df["sell_signal"] = (df["ema9"] < df["ema21"]) & (df["ema9"].shift(1) >= df["ema21"].shift(1)) & (df["rsi"] < 60)
+    # --- LƯU CÁC SỰ KIỆN CẮT NHAU VÀO DATAFRAME ĐỂ VẼ BIỂU ĐỒ ---
+    df["ema_buy"] = (df["ema9"] > df["ema21"]) & (df["ema9"].shift(1) <= df["ema21"].shift(1))
+    df["ema_sell"] = (df["ema9"] < df["ema21"]) & (df["ema9"].shift(1) >= df["ema21"].shift(1))
+    df["macd_buy"] = (df["macd_hist"] > 0) & (df["macd_hist"].shift(1) <= 0)
+    df["macd_sell"] = (df["macd_hist"] < 0) & (df["macd_hist"].shift(1) >= 0)
+    df["bb_break_up"] = (df["close"] > df["bb_upper"]) & (df["close"].shift(1) <= df["bb_upper"].shift(1))
+    df["bb_break_dn"] = (df["close"] < df["bb_lower"]) & (df["close"].shift(1) >= df["bb_lower"].shift(1))
 
     tr, dmp, dmm = np.zeros(n), np.zeros(n), np.zeros(n)
     for i in range(1, n):
@@ -102,7 +108,28 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 # ─────────────────────────────────────────────
-# PHÁT HIỆN XU HƯỚNG & TÍN HIỆU CHI TIẾT
+# TẠO BẢNG NHẬT KÝ TÍN HIỆU LỊCH SỬ (LOG)
+# ─────────────────────────────────────────────
+def get_signal_history(df: pd.DataFrame, tf_label: str) -> list:
+    history = []
+    recent_df = df.iloc[-150:] # Lấy 150 nến gần nhất (khoảng 1 buổi giao dịch)
+    for i in range(1, len(recent_df)):
+        row = recent_df.iloc[i]
+        t_obj = recent_df.index[i]
+        t_str = t_obj.strftime("%d/%m %H:%M:%S")
+
+        if row['ema_buy']: history.append({"_ts": t_obj, "Thời gian": t_str, "Khung": tf_label, "Chỉ báo": "EMA 9/21", "Tín hiệu": "🟢 CẮT LÊN (LONG)"})
+        elif row['ema_sell']: history.append({"_ts": t_obj, "Thời gian": t_str, "Khung": tf_label, "Chỉ báo": "EMA 9/21", "Tín hiệu": "🔴 CẮT XUỐNG (SHORT)"})
+
+        if row['macd_buy']: history.append({"_ts": t_obj, "Thời gian": t_str, "Khung": tf_label, "Chỉ báo": "MACD Histogram", "Tín hiệu": "🟢 ĐẢO CHIỀU TĂNG"})
+        elif row['macd_sell']: history.append({"_ts": t_obj, "Thời gian": t_str, "Khung": tf_label, "Chỉ báo": "MACD Histogram", "Tín hiệu": "🔴 ĐẢO CHIỀU GIẢM"})
+        
+        if row['bb_break_up']: history.append({"_ts": t_obj, "Thời gian": t_str, "Khung": tf_label, "Chỉ báo": "Bollinger Bands", "Tín hiệu": "🚀 BREAK CẠNH TRÊN"})
+        elif row['bb_break_dn']: history.append({"_ts": t_obj, "Thời gian": t_str, "Khung": tf_label, "Chỉ báo": "Bollinger Bands", "Tín hiệu": "💥 BREAK CẠNH DƯỚI"})
+    return history
+
+# ─────────────────────────────────────────────
+# PHÁT HIỆN TRẠNG THÁI HIỆN TẠI
 # ─────────────────────────────────────────────
 def detect_regime(df: pd.DataFrame) -> dict:
     last = df.iloc[-1]
@@ -120,14 +147,10 @@ def detect_regime(df: pd.DataFrame) -> dict:
     else: regime, strength = "DOWNTREND", "MẠNH" if adx > 35 else "VỪA"
 
     signals = []
-    if ema9 > ema21 > ema50: signals.append(("🟢", "EMA Cross (LONG)", "BUY"))
-    elif ema9 < ema21 < ema50: signals.append(("🔴", "EMA Cross (SHORT)", "SELL"))
-    if rsi < 30: signals.append(("🟢", f"RSI Oversold ({rsi:.1f})", "BUY"))
-    elif rsi > 70: signals.append(("🔴", f"RSI Overbought ({rsi:.1f})", "SELL"))
-    if df.iloc[-2].get("macd_hist", 0) < 0 < macd_h: signals.append(("🟢", "MACD Flip (Up)", "BUY"))
-    elif df.iloc[-2].get("macd_hist", 0) > 0 > macd_h: signals.append(("🔴", "MACD Flip (Down)", "SELL"))
-    if close > last.get("bb_upper", close): signals.append(("🚀", "BB Breakout (Cạnh trên)", "BUY"))
-    elif close < last.get("bb_lower", close): signals.append(("💥", "BB Breakout (Cạnh dưới)", "SELL"))
+    if ema9 > ema21 > ema50: signals.append(("🟢", "EMA Hướng Lên (LONG)", "TRẠNG THÁI"))
+    elif ema9 < ema21 < ema50: signals.append(("🔴", "EMA Hướng Xuống (SHORT)", "TRẠNG THÁI"))
+    if rsi < 30: signals.append(("🟢", f"RSI Oversold ({rsi:.1f})", "CẢNH BÁO"))
+    elif rsi > 70: signals.append(("🔴", f"RSI Overbought ({rsi:.1f})", "CẢNH BÁO"))
     
     hist_bb_w = df["bb_width"].dropna().tail(50)
     if len(hist_bb_w) > 10 and bb_w < hist_bb_w.quantile(0.15):
@@ -141,9 +164,7 @@ def detect_regime(df: pd.DataFrame) -> dict:
 COLORS = {"bg": "#0a0e1a", "grid": "#1e2d4a", "candle_up":"#00e676", "candle_dn":"#ff5252", "bb": "#475569", "bb_fill": "rgba(71,85,105,0.08)"}
 
 def build_chart(df: pd.DataFrame, title: str, show_ema: bool, show_bb: bool, show_signals: bool, show_trades: bool) -> go.Figure:
-    # --- ĐÃ MỞ RỘNG GÓC NHÌN LÊN 300 NẾN ---
-    df = df.copy().dropna(subset=["ema21"]).iloc[-300:] 
-    
+    df = df.copy().dropna(subset=["ema21"]).iloc[-300:] # HIỂN THỊ 300 NẾN
     fig = make_subplots(rows=4, cols=1, shared_xaxes=True, row_heights=[0.52, 0.15, 0.17, 0.16], vertical_spacing=0.01)
 
     fig.add_trace(go.Candlestick(x=df.index, open=df["open"], high=df["high"], low=df["low"], close=df["close"],
@@ -159,9 +180,14 @@ def build_chart(df: pd.DataFrame, title: str, show_ema: bool, show_bb: bool, sho
             fig.add_trace(go.Scatter(x=df.index, y=df[col], line=dict(color=color, width=1.5), name=lbl), row=1, col=1)
 
     if show_signals:
-        buys, sells = df[df["buy_signal"] == True], df[df["sell_signal"] == True]
-        if not buys.empty: fig.add_trace(go.Scatter(x=buys.index, y=buys["low"] - 1.5, mode="markers", marker=dict(symbol="triangle-up", size=14, color="#00e676"), name="MUA"), row=1, col=1)
-        if not sells.empty: fig.add_trace(go.Scatter(x=sells.index, y=sells["high"] + 1.5, mode="markers", marker=dict(symbol="triangle-down", size=14, color="#ff5252"), name="BÁN"), row=1, col=1)
+        # TÍN HIỆU EMA
+        buys_ema, sells_ema = df[df["ema_buy"]], df[df["ema_sell"]]
+        if not buys_ema.empty: fig.add_trace(go.Scatter(x=buys_ema.index, y=buys_ema["low"] - 1.5, mode="markers", marker=dict(symbol="triangle-up", size=13, color="#00e676"), name="EMA MUA"), row=1, col=1)
+        if not sells_ema.empty: fig.add_trace(go.Scatter(x=sells_ema.index, y=sells_ema["high"] + 1.5, mode="markers", marker=dict(symbol="triangle-down", size=13, color="#ff5252"), name="EMA BÁN"), row=1, col=1)
+        # TÍN HIỆU MACD
+        buys_macd, sells_macd = df[df["macd_buy"]], df[df["macd_sell"]]
+        if not buys_macd.empty: fig.add_trace(go.Scatter(x=buys_macd.index, y=buys_macd["low"] - 3.5, mode="markers", marker=dict(symbol="triangle-up", size=10, color="#38bdf8"), name="MACD MUA"), row=1, col=1)
+        if not sells_macd.empty: fig.add_trace(go.Scatter(x=sells_macd.index, y=sells_macd["high"] + 3.5, mode="markers", marker=dict(symbol="triangle-down", size=10, color="#f59e0b"), name="MACD BÁN"), row=1, col=1)
     
     if show_trades and "trade_history" in st.session_state:
         for t in st.session_state.trade_history:
@@ -275,18 +301,18 @@ c_r1, c_r5 = st.columns(2)
 with c_r1: st.markdown(regime_banner(regime1, "KHUNG 1 PHÚT"), unsafe_allow_html=True)
 with c_r5: st.markdown(regime_banner(regime5, "KHUNG 5 PHÚT"), unsafe_allow_html=True)
 
-# --- 3. BẢNG TÍN HIỆU CHI TIẾT ---
+# --- 3. BẢNG TRẠNG THÁI HIỆN TẠI TẠI (TREN CÙNG) ---
 all_sigs = [(*s, "1P", regime1["last_time"]) for s in regime1["signals"]] + [(*s, "5P", regime5["last_time"]) for s in regime5["signals"]]
 if all_sigs:
-    st.markdown('<div class="section-header" style="margin-top:10px">🎯 TÍN HIỆU PHÁT HIỆN GẦN NHẤT</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header" style="margin-top:10px">🎯 TRẠNG THÁI CẢNH BÁO HIỆN TẠI (TRÊN NẾN CUỐI CÙNG)</div>', unsafe_allow_html=True)
     sig_cols = st.columns(min(len(all_sigs), 4))
     for idx, (icon, desc, action, tf, sig_time) in enumerate(all_sigs[:4]):
-        color = "#00e676" if action=="BUY" else "#ff5252" if action=="SELL" else "#ffd600"
+        color = "#00e676" if "LONG" in desc or "Oversold" in desc or "Up" in desc else ("#ff5252" if "SHORT" in desc or "Overbought" in desc or "Down" in desc else "#ffd600")
         sig_cols[idx % 4].markdown(f"""
         <div style='background:#111827;border-left:3px solid {color};border-radius:6px;padding:10px;font-family:JetBrains Mono;font-size:11px;'>
             <div style='display:flex;justify-content:space-between;align-items:center;'>
                 <span style='color:{color};font-weight:700'>{icon} {action} [{tf}]</span>
-                <span style='color:#64748b;font-size:10px;'>🕒 {sig_time}</span>
+                <span style='color:#64748b;font-size:10px;'>🕒 Cập nhật: {sig_time}</span>
             </div>
             <div style='color:#94a3b8;margin-top:3px'>{desc}</div>
         </div>
@@ -296,9 +322,23 @@ st.markdown("<br>", unsafe_allow_html=True)
 # --- 4. BIỂU ĐỒ & PANEL VÀO LỆNH ---
 chart_col, trade_col = st.columns([3, 1.1])
 with chart_col:
-    tab1, tab5 = st.tabs(["📊 Biểu đồ 1 Phút", "📊 Biểu đồ 5 Phút"])
+    # 🌟 THÊM TAB 3: NHẬT KÝ TÍN HIỆU BOT 🌟
+    tab1, tab5, tab_signals = st.tabs(["📊 Biểu đồ 1 Phút", "📊 Biểu đồ 5 Phút", "🔔 Nhật Ký Tín Hiệu Bot"])
     with tab1: st.plotly_chart(build_chart(df1, f"{symbol} · 1P", show_ema, show_bb, show_signals, show_trades), use_container_width=True, config={"displayModeBar": False})
     with tab5: st.plotly_chart(build_chart(df5, f"{symbol} · 5P", show_ema, show_bb, show_signals, show_trades), use_container_width=True, config={"displayModeBar": False})
+    
+    with tab_signals:
+        st.markdown('<div class="section-header">LỊCH SỬ GIAO CẮT TÍN HIỆU (150 NẾN GẦN NHẤT)</div>', unsafe_allow_html=True)
+        h_1m = get_signal_history(df1, "1 Phút")
+        h_5m = get_signal_history(df5, "5 Phút")
+        all_hist = h_1m + h_5m
+        if all_hist:
+            # Sắp xếp theo mốc thời gian thực tế mới nhất lên đầu
+            all_hist.sort(key=lambda x: x["_ts"], reverse=True)
+            for item in all_hist: del item["_ts"] # Xóa cột thời gian nháp
+            st.dataframe(pd.DataFrame(all_hist), use_container_width=True, hide_index=True)
+        else:
+            st.info("Chưa có sự kiện giao cắt tín hiệu (EMA/MACD/Breakout) nào diễn ra gần đây.")
 
 with trade_col:
     st.markdown('<div class="section-header">🔫 VÀO LỆNH NHANH</div>', unsafe_allow_html=True)
