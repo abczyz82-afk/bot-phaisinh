@@ -1,8 +1,12 @@
 import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
+import numpy as np
 from vnstock import stock_historical_data
 from datetime import datetime, timedelta
+from ta.trend import EMAIndicator, MACD, ADXIndicator
+from ta.momentum import RSIIndicator
+from ta.volatility import BollingerBands
 
 # --- CẤU HÌNH TRANG WEB ---
 st.set_page_config(page_title="Hệ Sinh Thái Trading Cá Nhân", layout="wide", page_icon="📈")
@@ -57,43 +61,117 @@ def get_ps_pro_data(resolution_val, days_back, f_ema, s_ema, rsi_l, atr_l, tp1_m
             return None
         
         df = df.sort_values(by='time').reset_index(drop=True)
-        if len(df) < max(f_ema, s_ema, rsi_l, atr_l):
+        if len(df) < 50: # Đảm bảo đủ nến cho EMA50
             return None
 
-        # Tự tính EMA Nhanh và Chậm
-        df['EMA_Fast'] = df['close'].ewm(span=f_ema, adjust=False).mean()
-        df['EMA_Slow'] = df['close'].ewm(span=s_ema, adjust=False).mean()
+        # 1. Tính toán EMA
+        df['EMA9'] = EMAIndicator(close=df['close'], window=f_ema).ema_indicator()
+        df['EMA21'] = EMAIndicator(close=df['close'], window=s_ema).ema_indicator()
+        df['EMA50'] = EMAIndicator(close=df['close'], window=50).ema_indicator()
 
-        # Tự tính RSI
-        delta = df['close'].diff()
-        gain = delta.where(delta > 0, 0.0).ewm(alpha=1/rsi_l, adjust=False).mean()
-        loss = (-delta.where(delta < 0, 0.0)).ewm(alpha=1/rsi_l, adjust=False).mean()
-        rs = gain / loss
-        df['RSI'] = 100 - (100 / (1 + rs))
+        # 2. Tính toán RSI & MACD
+        df['RSI'] = RSIIndicator(close=df['close'], window=rsi_l).rsi()
+        macd = MACD(close=df['close'])
+        df['MACD_Hist'] = macd.macd_diff()
 
-        # Tự tính ATR
+        # 3. Tính toán Bollinger Bands & Vol MA
+        bb = BollingerBands(close=df['close'], window=20, window_dev=2)
+        df['BB_Upper'] = bb.bollinger_hband()
+        df['BB_Lower'] = bb.bollinger_lband()
+        df['BB_Width'] = bb.bollinger_wband()
+        df['Vol_MA'] = df['volume'].rolling(window=20).mean()
+
+        # 4. Tính toán ADX & Phân loại Regime
+        adx = ADXIndicator(high=df['high'], low=df['low'], close=df['close'], window=14)
+        df['ADX'] = adx.adx()
+        df['DI+'] = adx.adx_pos()
+        df['DI-'] = adx.adx_neg()
+
+        cond_regime = [
+            (df['ADX'] < 22),
+            (df['DI+'] > df['DI-']) & (df['ADX'] >= 22),
+            (df['DI-'] > df['DI+']) & (df['ADX'] >= 22)
+        ]
+        choices_regime = ['🔄 SIDEWAY', '🚀 UPTREND', '💥 DOWNTREND']
+        df['Regime'] = np.select(cond_regime, default='KHÔNG RÕ', condlist=cond_regime, choicelist=choices_regime)
+
+        # 5. ATR để tính Chốt lời / Cắt lỗ
         tr1 = df['high'] - df['low']
         tr2 = (df['high'] - df['close'].shift(1)).abs()
         tr3 = (df['low'] - df['close'].shift(1)).abs()
         tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
         df['ATR'] = tr.ewm(alpha=1/atr_l, adjust=False).mean()
 
-        df['EMA_Fast_Prev'] = df['EMA_Fast'].shift(1)
-        df['EMA_Slow_Prev'] = df['EMA_Slow'].shift(1)
-
-        df['Long_Signal'] = (df['EMA_Fast'] > df['EMA_Slow']) & (df['EMA_Fast_Prev'] <= df['EMA_Slow_Prev']) & (df['RSI'] > 50)
-        df['Short_Signal'] = (df['EMA_Fast'] < df['EMA_Slow']) & (df['EMA_Fast_Prev'] >= df['EMA_Slow_Prev']) & (df['RSI'] < 50)
-        
+        # 6. Quét Tín hiệu Real-time
         df['Tín Hiệu'] = '-'
+        df['Long_Signal'] = False
+        df['Short_Signal'] = False
         df['TP1'] = '-'
         df['TP2'] = '-'
         df['TP3'] = '-'
         df['SL'] = '-'
 
-        # Thêm đuôi .astype(str) để ép kiểu thành chữ, tránh xung đột dữ liệu
+        p15_bbw = df['BB_Width'].quantile(0.15)
+
+        for i in range(1, len(df)):
+            signals = []
+            is_long = False
+            is_short = False
+            
+            # Logic Tín hiệu
+            ema_cross_up = df['EMA9'].iloc[i] > df['EMA21'].iloc[i] and df['EMA9'].iloc[i-1] <= df['EMA21'].iloc[i-1]
+            ema_cross_down = df['EMA9'].iloc[i] < df['EMA21'].iloc[i] and df['EMA9'].iloc[i-1] >= df['EMA21'].iloc[i-1]
+            ema_bull = df['EMA9'].iloc[i] > df['EMA21'].iloc[i] > df['EMA50'].iloc[i] and df['Regime'].iloc[i] == '🚀 UPTREND'
+            
+            rsi_os = df['RSI'].iloc[i] < 30
+            rsi_ob = df['RSI'].iloc[i] > 70
+            macd_up = df['MACD_Hist'].iloc[i] > 0 and df['MACD_Hist'].iloc[i-1] <= 0
+            
+            bb_breakup = df['close'].iloc[i] > df['BB_Upper'].iloc[i]
+            bb_bounce = df['low'].iloc[i] <= df['BB_Lower'].iloc[i] and df['close'].iloc[i] > df['open'].iloc[i]
+            bb_squeeze = df['BB_Width'].iloc[i] < p15_bbw
+            vol_spike = df['volume'].iloc[i] > (2 * df['Vol_MA'].iloc[i])
+
+            # Áp dụng Hành động
+            if ema_cross_up: 
+                signals.append("🟢 EMA 9x21 Cắt Lên")
+                is_long = True
+            if ema_cross_down: 
+                signals.append("🔴 EMA 9x21 Cắt Xuống")
+                is_short = True
+            if ema_bull and not (df['EMA9'].iloc[i-1] > df['EMA21'].iloc[i-1] > df['EMA50'].iloc[i-1]):
+                signals.append("🟢 EMA Xếp BULL")
+                is_long = True
+            if rsi_os: 
+                signals.append("💎 RSI Quá Bán")
+                is_long = True
+            if rsi_ob: 
+                signals.append("🔥 RSI Quá Mua")
+                is_short = True
+            if macd_up: 
+                signals.append("📈 MACD Cắt Lên")
+                is_long = True
+            if bb_breakup: 
+                signals.append("🚀 BB Break Up")
+                is_long = True
+            if bb_bounce: 
+                signals.append("🟢 BB Bounce Up")
+                is_long = True
+            if bb_squeeze: 
+                signals.append("⚡ BB Squeeze")
+            if vol_spike: 
+                signals.append("📊 Volume Spike")
+
+            if signals:
+                df.at[i, 'Tín Hiệu'] = " | ".join(signals)
+            
+            # Đánh dấu tín hiệu để tính ATR TP/SL
+            if is_long: df.at[i, 'Long_Signal'] = True
+            if is_short: df.at[i, 'Short_Signal'] = True
+
+        # Áp dụng TP / SL cho các nến có tín hiệu Long/Short
         long_idx = df[df['Long_Signal'] == True].index
         if len(long_idx) > 0:
-            df.loc[long_idx, 'Tín Hiệu'] = '🟢 LONG'
             df.loc[long_idx, 'TP1'] = round(df.loc[long_idx, 'close'] + (df.loc[long_idx, 'ATR'] * tp1_m), 1).astype(str)
             df.loc[long_idx, 'TP2'] = round(df.loc[long_idx, 'close'] + (df.loc[long_idx, 'ATR'] * tp2_m), 1).astype(str)
             df.loc[long_idx, 'TP3'] = round(df.loc[long_idx, 'close'] + (df.loc[long_idx, 'ATR'] * tp3_m), 1).astype(str)
@@ -101,7 +179,6 @@ def get_ps_pro_data(resolution_val, days_back, f_ema, s_ema, rsi_l, atr_l, tp1_m
 
         short_idx = df[df['Short_Signal'] == True].index
         if len(short_idx) > 0:
-            df.loc[short_idx, 'Tín Hiệu'] = '🔴 SHORT'
             df.loc[short_idx, 'TP1'] = round(df.loc[short_idx, 'close'] - (df.loc[short_idx, 'ATR'] * tp1_m), 1).astype(str)
             df.loc[short_idx, 'TP2'] = round(df.loc[short_idx, 'close'] - (df.loc[short_idx, 'ATR'] * tp2_m), 1).astype(str)
             df.loc[short_idx, 'TP3'] = round(df.loc[short_idx, 'close'] - (df.loc[short_idx, 'ATR'] * tp3_m), 1).astype(str)
@@ -163,19 +240,32 @@ def render_ps_bot(df_ps, timeframe_name):
         change = latest['close'] - yesterday_close
         pct_change = (change / yesterday_close) * 100 if yesterday_close != 0 else 0
 
-        col1, col2 = st.columns([1, 2])
+        col1, col2, col3 = st.columns([2, 1, 1])
         with col1:
-            st.metric(label=f"Giá VN30F1M hiện tại", value=f"{latest['close']}", delta=f"{change:.1f} điểm ({pct_change:.2f}%) so với hôm qua")
+            st.metric(label=f"Giá VN30F1M hiện tại", value=f"{latest['close']}", delta=f"{change:.1f} điểm ({pct_change:.2f}%) so với qua")
         with col2:
-            st.write("")
-            st.write(f"**🕒 Cập nhật nến lúc:** `{latest['time']}`")
-            st.caption("ℹ️ Đang chạy với cấu hình tham số tùy chỉnh từ Sidebar.")
+            st.metric(label="Thị trường (Regime)", value=latest['Regime'])
+        with col3:
+            st.metric(label="Chỉ số RSI", value=latest['RSI'])
+            
+        st.write(f"**🕒 Cập nhật nến lúc:** `{latest['time']}`")
+        
+        # Bảng thông báo quy tắc
+        with st.expander("📖 HIỂN THỊ CHIẾN LƯỢC THEO REGIME", expanded=False):
+            st.markdown("""
+            **Chiến lược theo regime:**
+            - 🔄 **SIDEWAY** (ADX<22): Canh BB Lower mua, BB Upper bán. SL 2-3 điểm.
+            - 🚀 **UPTREND** (DI+>DI-): Chỉ LONG, pullback về EMA21. Ride trend.
+            - 💥 **DOWNTREND** (DI->DI+): Chỉ SHORT, hồi về EMA21. Ride trend.
+            - ⚡ **BB Squeeze**: Chờ Vol Spike xác nhận hướng → vào lệnh.
+            """)
         
         st.divider()
         
         if latest['Long_Signal'] or latest['Short_Signal']:
             signal_type = "🟢 LONG" if latest['Long_Signal'] else "🔴 SHORT"
             st.success(f"### 🚨 PHÁT HIỆN TÍN HIỆU {signal_type} TẠI GIÁ {latest['close']}")
+            st.write(f"**Nguyên nhân kích hoạt:** {latest['Tín Hiệu']}")
             
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("🎯 Chốt lời 1 (TP1)", latest['TP1'])
@@ -194,12 +284,12 @@ def render_ps_bot(df_ps, timeframe_name):
                 history_display = history_display.sort_values('Thời gian xuất hiện lệnh', ascending=False).reset_index(drop=True)
                 st.dataframe(history_display, use_container_width=True)
             else:
-                st.write("Chưa có tín hiệu nào được ghi nhận trong khoảng thời gian này.")
+                st.write("Chưa có tín hiệu BUY/SELL nào được ghi nhận trong khoảng thời gian này.")
         
         st.write("---")
         st.subheader(f"Bảng dữ liệu 20 nến gần nhất ({timeframe_name})")
-        display_df = df_ps[['time', 'open', 'high', 'low', 'close', 'RSI', 'Tín Hiệu', 'TP1', 'TP2', 'TP3', 'SL']].tail(20)
-        st.dataframe(display_df, use_container_width=True)
+        display_df = df_ps[['time', 'open', 'high', 'low', 'close', 'Regime', 'Tín Hiệu', 'TP1', 'TP2', 'TP3', 'SL']].tail(20)
+        st.dataframe(display_df.sort_index(ascending=False), use_container_width=True)
     else:
         st.warning("Không có dữ liệu trả về từ API. Có thể ngoài giờ giao dịch.")
 
@@ -207,7 +297,6 @@ def render_ps_bot(df_ps, timeframe_name):
 def render_market_flow(current_ps_price):
     st.subheader("📊 Thống kê Dòng tiền Phái Sinh")
     
-    # 1. TÍNH TOÁN DỮ LIỆU KHỐI NGOẠI (Dùng code để tính toán thực tế)
     foreign_data_history = [
         {"date": "02/05", "buy_vol": 5000, "sell_vol": 3000, "vwap": 1230.5},
         {"date": "03/05", "buy_vol": 4000, "sell_vol": 2000, "vwap": 1240.0},
@@ -215,7 +304,6 @@ def render_market_flow(current_ps_price):
     ]
     f_result = calculate_foreign_flow(current_ps_price, foreign_data_history)
     
-    # 2. DỮ LIỆU MOCK CHO TỰ DOANH VÀ NHỎ LẺ (Chưa có API thực)
     data = {
         "date": datetime.now().strftime("%d/%m/%Y"),
         "prop": {"net": 405, "net_type": "Long", "daily_pnl": -2.1, "hold_vol": -1948, "hold_type": "Short", "avg_price": 1962.1, "month_pnl": -9.6},
@@ -224,7 +312,6 @@ def render_market_flow(current_ps_price):
 
     st.write(f"**Phái Sinh ngày {data['date']} (Cập nhật Real-time Lãi/Lỗ theo giá: {current_ps_price})**")
     
-    # --- Khối Ngoại (Tây) --- Dùng dữ liệu thật đã tính
     f_icon = "🔴" if f_result['today_net_type'] == "Short" else "🟢"
     st.markdown(f"""
     {f_icon} **Hnay Tây {f_result['today_net_type']} ròng :** {f_result['today_net_vol']}HĐ ; lãi (lướt)/ngày : {f_result['today_pnl_ty']} tỷ.  
@@ -232,7 +319,6 @@ def render_market_flow(current_ps_price):
     """)
     st.markdown("---")
 
-    # --- Tự Doanh (TD) ---
     p_icon = "🔴" if data['prop']['net_type'] == "Short" else "✅"
     st.markdown(f"""
     {p_icon} **Hnay TD {data['prop']['net_type']} :** {data['prop']['net']}HĐ ; lỗ/ngày : {data['prop']['daily_pnl']} tỷ.  
@@ -240,7 +326,6 @@ def render_market_flow(current_ps_price):
     """)
     st.markdown("---")
 
-    # --- Nhỏ lẻ (CN) ---
     r_icon = "🔴" if data['retail']['net_type'] == "Short" else "✅"
     st.markdown(f"""
     {r_icon} **Hnay CN Nhỏ lẻ # {data['retail']['net_type']} :** {data['retail']['net']}HĐ ; lỗ/ngày : {data['retail']['daily_pnl']} tỷ.  
@@ -289,8 +374,7 @@ with tab3:
 
 # TAB 4: THỐNG KÊ DÒNG TIỀN
 with tab4:
-    # Cố gắng lấy giá phái sinh hiện tại từ Tab 1 Phút (nếu có) để tính Lãi/Lỗ trực tiếp
-    current_ps_price = 1250.0  # Giá mặc định phòng khi API lỗi
+    current_ps_price = 1250.0  
     if 'df_1m_pro' in locals() and isinstance(df_1m_pro, pd.DataFrame) and not df_1m_pro.empty:
         current_ps_price = df_1m_pro.iloc[-1]['close']
         
