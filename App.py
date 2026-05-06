@@ -34,8 +34,6 @@ section[data-testid="stSidebar"] * { color: #c9d5e8 !important; }
 #MainMenu, footer, header { visibility: hidden; }
 .block-container { padding-top: 1rem; padding-bottom: 1rem; }
 .stSelectbox > div > div, .stNumberInput > div > div > input { background: #111827; border-color: #1e2d4a; color: #e2e8f0; }
-/* Table Styling */
-div[data-testid="stDataFrame"] { font-family: 'JetBrains Mono', monospace; font-size: 13px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -108,6 +106,8 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
 # ─────────────────────────────────────────────
 def detect_regime(df: pd.DataFrame) -> dict:
     last = df.iloc[-1]
+    last_time = df.index[-1].strftime("%H:%M:%S")
+    
     adx, di_pos, di_neg, rsi, bb_w, ema9, ema21, ema50, close, macd_h = (
         last.get("adx", 20), last.get("di_pos", 20), last.get("di_neg", 20), last.get("rsi", 50),
         last.get("bb_width", 0.03), last.get("ema9", last["close"]), last.get("ema21", last["close"]),
@@ -133,7 +133,7 @@ def detect_regime(df: pd.DataFrame) -> dict:
     if len(hist_bb_w) > 10 and bb_w < hist_bb_w.quantile(0.15):
         signals.append(("⚡", "BB Squeeze (Nén giá)", "WATCH"))
 
-    return {"regime": regime, "strength": strength, "adx": adx, "di_pos": di_pos, "di_neg": di_neg, "rsi": rsi, "ema9": ema9, "ema21": ema21, "signals": signals}
+    return {"regime": regime, "strength": strength, "adx": adx, "di_pos": di_pos, "di_neg": di_neg, "rsi": rsi, "ema9": ema9, "ema21": ema21, "signals": signals, "last_time": last_time}
 
 # ─────────────────────────────────────────────
 # BIỂU ĐỒ NẾN + TOGGLE BẬT TẮT CHỈ BÁO
@@ -203,12 +203,10 @@ def close_trade(idx, exit_price, reason="Đóng thủ công"):
         t["exit_price"] = exit_price
         t["exit_time"] = datetime.now().strftime("%H:%M:%S")
         t["reason"] = reason
-        # Tính toán điểm được/mất
         pts = (exit_price - t["entry"]) * (1 if t["direction"] == "LONG" else -1)
         t["pnl_points"] = pts
         t["pnl"] = pts * t["size"] * 100_000
 
-# THUẬT TOÁN TỰ ĐỘNG CHỐT LỜI / CẮT LỖ
 def auto_check_trades(current_price):
     for i, t in enumerate(st.session_state.trade_history):
         if t["status"] == "OPEN":
@@ -250,7 +248,6 @@ df1, df5 = add_indicators(df1), add_indicators(df5)
 current_price, prev_close = df1["close"].iloc[-1], df1["close"].iloc[-2]
 regime1, regime5 = detect_regime(df1), detect_regime(df5)
 
-# KÍCH HOẠT QUÉT LỆNH TỰ ĐỘNG
 auto_check_trades(current_price)
 
 # --- 1. DẢI BĂNG THÔNG SỐ (METRICS) ---
@@ -277,13 +274,21 @@ with c_r1: st.markdown(regime_banner(regime1, "KHUNG 1 PHÚT"), unsafe_allow_htm
 with c_r5: st.markdown(regime_banner(regime5, "KHUNG 5 PHÚT"), unsafe_allow_html=True)
 
 # --- 3. BẢNG TÍN HIỆU CHI TIẾT ---
-all_sigs = [(s, "1P") for s in regime1["signals"]] + [(s, "5P") for s in regime5["signals"]]
+all_sigs = [(*s, "1P", regime1["last_time"]) for s in regime1["signals"]] + [(*s, "5P", regime5["last_time"]) for s in regime5["signals"]]
 if all_sigs:
     st.markdown('<div class="section-header" style="margin-top:10px">🎯 TÍN HIỆU PHÁT HIỆN GẦN NHẤT</div>', unsafe_allow_html=True)
     sig_cols = st.columns(min(len(all_sigs), 4))
-    for idx, ((icon, desc, action), tf) in enumerate(all_sigs[:4]):
+    for idx, (icon, desc, action, tf, sig_time) in enumerate(all_sigs[:4]):
         color = "#00e676" if action=="BUY" else "#ff5252" if action=="SELL" else "#ffd600"
-        sig_cols[idx % 4].markdown(f"<div style='background:#111827;border-left:3px solid {color};border-radius:6px;padding:10px;font-family:JetBrains Mono;font-size:11px;'><div style='color:{color};font-weight:700'>{icon} {action} [{tf}]</div><div style='color:#94a3b8;margin-top:3px'>{desc}</div></div>", unsafe_allow_html=True)
+        sig_cols[idx % 4].markdown(f"""
+        <div style='background:#111827;border-left:3px solid {color};border-radius:6px;padding:10px;font-family:JetBrains Mono;font-size:11px;'>
+            <div style='display:flex;justify-content:space-between;align-items:center;'>
+                <span style='color:{color};font-weight:700'>{icon} {action} [{tf}]</span>
+                <span style='color:#64748b;font-size:10px;'>🕒 {sig_time}</span>
+            </div>
+            <div style='color:#94a3b8;margin-top:3px'>{desc}</div>
+        </div>
+        """, unsafe_allow_html=True)
 st.markdown("<br>", unsafe_allow_html=True)
 
 # --- 4. BIỂU ĐỒ & PANEL VÀO LỆNH ---
@@ -304,10 +309,7 @@ with trade_col:
         if st.button("🔴 SELL (SHORT)", use_container_width=True): add_trade("SHORT", entry_price, entry_price-tp_points, entry_price+sl_points, lot_size); st.rerun()
 
     st.markdown('<div class="section-header" style="margin-top:14px">📋 LỆNH ĐANG MỞ (OPEN)</div>', unsafe_allow_html=True)
-    open_pnl = sum(((current_price - t["entry"]) * (1 if t["direction"]=="LONG" else -1) * t["size"]) for t in st.session_state.trade_history if t["status"]=="OPEN")
-    st.markdown(f"<div style='font-family:JetBrains Mono; font-size:13px; margin: 5px 0;'>P&L Đang mở: <b style='color:{'#00e676' if open_pnl >= 0 else '#ff5252'}'>{open_pnl:+.1f} điểm</b></div>", unsafe_allow_html=True)
-
-    # Hiển thị các lệnh ĐANG MỞ
+    
     open_trades_exist = False
     for i, t in enumerate(st.session_state.trade_history):
         if t["status"] == "OPEN":
@@ -318,40 +320,30 @@ with trade_col:
     if not open_trades_exist:
         st.markdown("<div style='color:#475569;font-size:12px;font-family:JetBrains Mono'>Chưa có lệnh nào đang mở.</div>", unsafe_allow_html=True)
 
-# --- 5. BẢNG THỐNG KÊ LỊCH SỬ GIAO DỊCH (MỚI) ---
-st.markdown("<br><br>", unsafe_allow_html=True)
-st.markdown('<div class="section-header">📔 BẢNG THỐNG KÊ LỊCH SỬ GIAO DỊCH (NHẬT KÝ ĐÓNG LỆNH)</div>', unsafe_allow_html=True)
-
-# Lọc ra các lệnh đã ĐÓNG
-closed_trades = [t for t in st.session_state.trade_history if t["status"] == "CLOSED"]
-
-if closed_trades:
-    # Chuẩn bị dữ liệu hiển thị cho bảng
-    history_data = []
-    for t in closed_trades:
-        history_data.append({
-            "Mã Lệnh": f"#{t['id']}",
-            "Lệnh": "🟢 LONG" if t["direction"] == "LONG" else "🔴 SHORT",
-            "Giờ VÀO": f"{t['date']} {t['time']}",
-            "Giờ RA": f"{t['date']} {t['exit_time']}",
-            "Giá VÀO": f"{t['entry']:.1f}",
-            "Giá RA": f"{t['exit_price']:.1f}",
-            "Kết quả": t["reason"],
-            "Điểm Lãi/Lỗ": f"{t['pnl_points']:+.1f} đ",
-            "Tổng Tiền (VNĐ)": f"{t.get('pnl', 0):+,.0f} ₫"
-        })
+    # LỊCH SỬ LỆNH ĐÃ ĐÓNG (GẮN Ở CỘT BÊN PHẢI)
+    st.markdown('<div class="section-header" style="margin-top:20px">📜 LỊCH SỬ LỆNH ĐÃ ĐÓNG</div>', unsafe_allow_html=True)
+    closed_trades = [t for t in st.session_state.trade_history if t["status"] == "CLOSED"]
     
-    df_history = pd.DataFrame(history_data)
-    
-    # Hiển thị DataFrame full size
-    st.dataframe(df_history, use_container_width=True, hide_index=True)
-    
-    # Nút xóa lịch sử dưới cùng
-    if st.button("🗑️ Xóa toàn bộ Lịch sử (Reset)", type="primary"): 
-        st.session_state.trade_history = []
-        st.rerun()
-else:
-    st.info("⚪ Chưa có lệnh nào được đóng. Hãy vào lệnh phía trên và chờ hệ thống Chốt lời / Cắt lỗ.")
+    if closed_trades:
+        for t in closed_trades:
+            pnl_color = "#00e676" if t["pnl_points"] >= 0 else "#ff5252"
+            dir_color = "#00e676" if t["direction"] == "LONG" else "#ff5252"
+            reason_icon = "🎯" if "Chốt" in t["reason"] else ("🛡️" if "Cắt" in t["reason"] else "👋")
+            st.markdown(f"""
+            <div style='background:#111827;border:1px solid #1e2d4a;padding:10px;margin-top:6px;font-size:11px;font-family:JetBrains Mono;'>
+                <div style='display:flex;justify-content:space-between;margin-bottom:4px;'>
+                    <span style='color:{dir_color}'><b>#{t['id']} {t['direction']}</b></span>
+                    <span style='color:{pnl_color};font-weight:700'>{t['pnl_points']:+.1f} điểm</span>
+                </div>
+                <div style='color:#94a3b8'>🕒 VÀO: {t['time']} ➔ RA: {t['exit_time']}</div>
+                <div style='color:#64748b;margin-top:2px'>{reason_icon} {t['reason']} | Giá: {t['entry']:.1f} ➔ {t['exit_price']:.1f}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        if st.button("🗑️ Xóa toàn bộ Lịch sử", use_container_width=True): 
+            st.session_state.trade_history = []
+            st.rerun()
+    else:
+        st.markdown("<div style='color:#475569;font-size:12px;font-family:JetBrains Mono'>Chưa có lệnh nào được đóng.</div>", unsafe_allow_html=True)
 
 # --- 6. AUTO REFRESH LOOP ---
 if auto_refresh:
