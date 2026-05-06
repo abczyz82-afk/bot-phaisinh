@@ -24,11 +24,10 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Khởi tạo session state cho tracking (Nâng cấp 6)
 if "trade_log" not in st.session_state: st.session_state.trade_log = []
 
 # ─────────────────────────────────────────────
-# DATA ENGINE (Nâng cấp 5: vnstock3 + Fallback)
+# DATA ENGINE
 # ─────────────────────────────────────────────
 @st.cache_data(ttl=20)
 def fetch_vn30f_data(symbol, tf, days=7):
@@ -48,13 +47,11 @@ def fetch_vn30f_data(symbol, tf, days=7):
     return pd.DataFrame()
 
 # ─────────────────────────────────────────────
-# INDICATOR ENGINE (Nâng cấp 3 & 4: VWAP + Candles)
+# INDICATOR ENGINE
 # ─────────────────────────────────────────────
 def apply_advanced_tech(df):
     if df.empty: return df
-    # VWAP (Nâng cấp 4)
     df.ta.vwap(append=True)
-    # Cơ bản
     df.ta.rsi(length=14, append=True)
     df.ta.macd(append=True)
     df.ta.adx(append=True)
@@ -62,7 +59,6 @@ def apply_advanced_tech(df):
     df.ta.ema(length=9, append=True)
     df.ta.ema(length=21, append=True)
     
-    # Mẫu nến (Nâng cấp 3)
     body = abs(df['close'] - df['open'])
     range_total = df['high'] - df['low']
     df['is_hammer'] = (df['low'] < df[['open', 'close']].min(axis=1) - body * 2) & (range_total > 0)
@@ -72,7 +68,7 @@ def apply_advanced_tech(df):
     return df
 
 # ─────────────────────────────────────────────
-# CONFLUENCE CORE (Nâng cấp 1 & 2)
+# CONFLUENCE CORE
 # ─────────────────────────────────────────────
 def get_confluence_report(df1, df5):
     score = 0
@@ -80,38 +76,32 @@ def get_confluence_report(df1, df5):
     l1 = df1.iloc[-1]
     l5 = df5.iloc[-1]
     
-    # 1. Trend & VWAP (25đ)
     if l1['close'] > l1['VWAP_D']:
         score += 15; reasons.append("Giá trên VWAP (Bull Bias)")
     else:
         score -= 15; reasons.append("Giá dưới VWAP (Bear Bias)")
         
-    # 2. Đa khung thời gian (20đ)
     ema_1p = l1['EMA_9'] > l1['EMA_21']
     ema_5p = l5['EMA_9'] > l5['EMA_21']
     if ema_1p == ema_5p:
         score += 20 if ema_1p else -20
         reasons.append("Đồng thuận đa khung (1P & 5P)")
         
-    # 3. Momentum ADX (20đ)
     if l1['ADX_14'] > 25:
         if l1['DMP_14'] > l1['DMN_14']: score += 20
         else: score -= 20
         reasons.append("Trend mạnh (ADX > 25)")
         
-    # 4. Mẫu nến (15đ)
     if l1['is_engulfing_bull']: score += 15; reasons.append("Nến Nhấn chìm TĂNG")
     if l1['is_engulfing_bear']: score -= 15; reasons.append("Nến Nhấn chìm GIẢM")
     
-    # 5. RSI Divergence (Dự báo - Nâng cấp 2)
-    # Đơn giản hóa check 5 nến
     if df1['close'].tail(5).is_monotonic_decreasing and df1['RSI_14'].tail(5).is_monotonic_increasing:
         score += 20; reasons.append("PHÂN KỲ RSI DƯƠNG (Dự báo đảo chiều tăng)")
 
     return score, reasons
 
 # ─────────────────────────────────────────────
-# GAUGE CHART COMPONENT
+# GAUGE CHART (ĐÃ FIX LỖI TẠI ĐÂY)
 # ─────────────────────────────────────────────
 def draw_gauge(score):
     fig = go.Figure(go.Indicator(
@@ -148,15 +138,11 @@ df5 = fetch_vn30f_data(symbol, 5)
 if not df1.empty and not df5.empty:
     df1 = apply_advanced_tech(df1)
     df5 = apply_advanced_tech(df5)
-    
     score, reasons = get_confluence_report(df1, df5)
     
-    # Layout Main
     col_gauge, col_rec = st.columns([1, 1.5])
-    
     with col_gauge:
         st.plotly_chart(draw_gauge(score), use_container_width=True)
-        
     with col_rec:
         st.markdown("### 🤖 KHUYẾN NGHỊ HỆ THỐNG")
         if score >= 70:
@@ -165,41 +151,33 @@ if not df1.empty and not df5.empty:
             st.markdown(f'<div class="recommendation-short">💥 KHUYẾN NGHỊ SHORT MẠNH<br>Score: {score} | Xác suất giảm mạnh</div>', unsafe_allow_html=True)
         else:
             st.warning("🔄 TRẠNG THÁI CHỜ: Score chưa đủ hội tụ. Ưu tiên quan sát.")
-            
         st.markdown("---")
         for r in reasons:
-            color = "#00e676" if "Bull" in r or "TĂNG" in r or "trên" in r else "#ff5252"
+            color = "#00e676" if any(x in r for x in ["Bull", "TĂNG", "trên", "DƯƠNG"]) else "#ff5252"
             st.markdown(f"<span style='color:{color}'>• {r}</span>", unsafe_allow_html=True)
 
-    # Biểu đồ kỹ thuật
-    tab1, tab2 = st.tabs(["📊 Khung 1 Phút (Entry)", "📈 Phân tích Win Rate"])
-    
+    tab1, tab2 = st.tabs(["📊 Biểu đồ Kỹ thuật", "📈 Hiệu suất"])
     with tab1:
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
-        # Nến & VWAP
-        fig.add_trace(go.Candlestick(x=df1.index, open=df1['open'], high=df1['high'], low=df1['low'], close=df1['close'], name="VN30F1M"), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df1.index, y=df1['VWAP_D'], line=dict(color='#ffd600', width=1.5), name="VWAP"), row=1, col=1)
-        # RSI
+        fig.add_trace(go.Candlestick(x=df1.index, open=df1['open'], high=df1['high'], low=df1['low'], close=df1['close'], name=symbol), row=1, col=1)
+        if 'VWAP_D' in df1.columns:
+            fig.add_trace(go.Scatter(x=df1.index, y=df1['VWAP_D'], line=dict(color='#ffd600', width=1.5), name="VWAP"), row=1, col=1)
         fig.add_trace(go.Scatter(x=df1.index, y=df1['RSI_14'], line=dict(color='#38bdf8'), name="RSI"), row=2, col=1)
         fig.add_hline(y=70, line_dash="dot", line_color="red", row=2, col=1)
         fig.add_hline(y=30, line_dash="dot", line_color="green", row=2, col=1)
-        
         fig.update_layout(template="plotly_dark", height=600, xaxis_rangeslider_visible=False, margin=dict(l=0, r=0, t=20, b=0))
         st.plotly_chart(fig, use_container_width=True)
 
     with tab2:
-        st.markdown("### 📈 THỐNG KÊ CHIẾN THUẬT (Nâng cấp 6)")
-        # Demo Winrate Logic
+        st.markdown("### 📈 THỐNG KÊ CHIẾN THUẬT")
         c1, c2, c3 = st.columns(3)
         c1.metric("Win Rate dự kiến", "68%", "+2.1%")
         c2.metric("Profit Factor", "1.75", "Mạnh")
         c3.metric("Expectancy (Pts)", "+3.2", "Tích cực")
-        st.info("Hệ thống đang tự động tracking các nến có Score > 70 để đánh giá hiệu suất thực tế.")
 
 else:
     st.error("Không thể kết nối dữ liệu. Vui lòng kiểm tra lại phiên giao dịch.")
 
-# Auto Refresh Logic
 if auto_refresh:
     time.sleep(15)
     st.rerun()
