@@ -301,7 +301,7 @@ h1.markdown(f'<div class="metric-box"><div class="metric-label">{symbol}</div><d
 h2.markdown(f'<div class="metric-box"><div class="metric-label">Xu hướng 5P</div><div class="metric-value" style="color:{"#00e676" if regime5["regime"]=="UPTREND" else "#ff5252" if regime5["regime"]=="DOWNTREND" else "#ffd600"}">{regime5["regime"]}</div></div>', unsafe_allow_html=True)
 h3.markdown(f'<div class="metric-box"><div class="metric-label">RSI (1P)</div><div class="metric-value {"green" if regime1["rsi"]<40 else "red" if regime1["rsi"]>60 else "yellow"}">{regime1["rsi"]:.1f}</div></div>', unsafe_allow_html=True)
 h4.markdown(f'<div class="metric-box"><div class="metric-label">EMA 9/21</div><div class="metric-value {"green" if regime1["ema9"]>regime1["ema21"] else "red"}">{"BULL ▲" if regime1["ema9"]>regime1["ema21"] else "BEAR ▼"}</div></div>', unsafe_allow_html=True)
-h5.markdown(f'<div class="metric-box"><div class="metric-label">DI+ / DI- (1P)</div><div class="metric-value"><span class="green">{regime1["di_pos"]:.1f}</span> / <span class="red">{regime1["di_neg"]:.1f}</span></div></div>', unsafe_allow_html=True)
+h5.markdown(f'<div class="metric-box"><div class="metric-label">DI+/DI- (1P)</div><div class="metric-value"><span class="green">{regime1["di_pos"]:.1f}</span> / <span class="red">{regime1["di_neg"]:.1f}</span></div></div>', unsafe_allow_html=True)
 h6.markdown(f'<div class="metric-box"><div class="metric-label">Volume</div><div class="metric-value yellow">{int(df1["volume"].iloc[-1]):,}</div></div>', unsafe_allow_html=True)
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -369,32 +369,29 @@ if all_sigs:
         """, unsafe_allow_html=True)
 st.markdown("<br>", unsafe_allow_html=True)
 
-# --- 5. BIỂU ĐỒ & NHẬT KÝ (FULL WIDTH MỚI) ---
-tab1, tab5, tab_signals = st.tabs(["📊 Biểu đồ 1 Phút", "📊 Biểu đồ 5 Phút", "🔔 Nhật Ký Tín Hiệu Bot"])
-with tab1: st.plotly_chart(build_chart(df1, f"{symbol} · 1P", show_ema, show_bb, show_signals, show_trades), use_container_width=True, config={"displayModeBar": False})
-with tab5: st.plotly_chart(build_chart(df5, f"{symbol} · 5P", show_ema, show_bb, show_signals, show_trades), use_container_width=True, config={"displayModeBar": False})
+# --- 5. BIỂU ĐỒ & PANEL VÀO LỆNH (NGANG HÀNG) ---
+chart_col, trade_col = st.columns([3.2, 1.2])
 
-with tab_signals:
-    st.markdown('<div class="section-header">LỊCH SỬ GIAO CẮT TÍN HIỆU (150 NẾN GẦN NHẤT)</div>', unsafe_allow_html=True)
-    h_1m = get_signal_history(df1, "1 Phút")
-    h_5m = get_signal_history(df5, "5 Phút")
-    all_hist = h_1m + h_5m
-    if all_hist:
-        all_hist.sort(key=lambda x: x["_ts"], reverse=True)
-        for item in all_hist: del item["_ts"]
-        st.dataframe(pd.DataFrame(all_hist), use_container_width=True, hide_index=True)
-    else:
-        st.info("Chưa có sự kiện giao cắt tín hiệu (EMA/MACD/Breakout) nào diễn ra gần đây.")
+with chart_col:
+    tab1, tab5, tab_signals = st.tabs(["📊 Biểu đồ 1 Phút", "📊 Biểu đồ 5 Phút", "🔔 Nhật Ký Tín Hiệu Bot"])
+    with tab1: st.plotly_chart(build_chart(df1, f"{symbol} · 1P", show_ema, show_bb, show_signals, show_trades), use_container_width=True, config={"displayModeBar": False})
+    with tab5: st.plotly_chart(build_chart(df5, f"{symbol} · 5P", show_ema, show_bb, show_signals, show_trades), use_container_width=True, config={"displayModeBar": False})
+    
+    with tab_signals:
+        st.markdown('<div class="section-header">LỊCH SỬ GIAO CẮT TÍN HIỆU (150 NẾN GẦN NHẤT)</div>', unsafe_allow_html=True)
+        h_1m = get_signal_history(df1, "1 Phút")
+        h_5m = get_signal_history(df5, "5 Phút")
+        all_hist = h_1m + h_5m
+        if all_hist:
+            all_hist.sort(key=lambda x: x["_ts"], reverse=True)
+            for item in all_hist: del item["_ts"]
+            st.dataframe(pd.DataFrame(all_hist), use_container_width=True, hide_index=True)
+        else:
+            st.info("Chưa có sự kiện giao cắt tín hiệu (EMA/MACD/Breakout) nào diễn ra gần đây.")
 
-# ─────────────────────────────────────────────
-# 6. KHU VỰC ĐẶT LỆNH & QUẢN LÝ TÀI KHOẢN (ĐƯA XUỐNG DƯỚI)
-# ─────────────────────────────────────────────
-st.markdown("<hr>", unsafe_allow_html=True)
-st.markdown('<div class="section-header">💼 KHU VỰC GIAO DỊCH & QUẢN LÝ LỆNH</div>', unsafe_allow_html=True)
-
-col_order, col_open = st.columns([1.5, 2.5])
-
-with col_order:
+with trade_col:
+    st.markdown('<div class="section-header">🔫 VÀO LỆNH & QUẢN LÝ</div>', unsafe_allow_html=True)
+    
     current_atr = df5["atr"].iloc[-1] if not np.isnan(df5["atr"].iloc[-1]) else 2.0
     if auto_sltp:
         calc_sl = current_atr * 1.0  
@@ -428,8 +425,7 @@ with col_order:
                 add_trade("SHORT", entry_price, entry_price-tp1_points, entry_price-tp2_points, entry_price-tp3_points, entry_price+sl_points, lot_size)
             st.rerun()
 
-with col_open:
-    st.markdown('<div style="font-size:12px; color:#94a3b8; font-family:JetBrains Mono; margin-bottom:10px; font-weight:bold;">📋 LỆNH ĐANG MỞ (OPEN)</div>', unsafe_allow_html=True)
+    st.markdown('<div style="font-size:12px; color:#94a3b8; font-family:JetBrains Mono; margin-top:20px; margin-bottom:10px; font-weight:bold;">📋 LỆNH ĐANG MỞ (OPEN)</div>', unsafe_allow_html=True)
     open_trades_exist = False
     for i, t in enumerate(st.session_state.trade_history):
         if t["status"] == "OPEN":
@@ -449,9 +445,10 @@ with col_open:
         st.markdown("<div style='color:#475569;font-size:12px;font-family:JetBrains Mono'>Chưa có lệnh nào đang mở.</div>", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
-# 7. NHẬT KÝ ĐÓNG LỆNH (FULL TABLE)
+# 6. NHẬT KÝ ĐÓNG LỆNH (FULL TABLE DƯỚI CÙNG)
 # ─────────────────────────────────────────────
-st.markdown('<div class="section-header" style="margin-top:20px">📔 NHẬT KÝ LỆNH ĐÃ ĐÓNG</div>', unsafe_allow_html=True)
+st.markdown("<hr>", unsafe_allow_html=True)
+st.markdown('<div class="section-header">📔 NHẬT KÝ LỆNH ĐÃ ĐÓNG</div>', unsafe_allow_html=True)
 closed_trades = [t for t in st.session_state.trade_history if t["status"] == "CLOSED"]
 
 if closed_trades:
@@ -475,7 +472,7 @@ if closed_trades:
 else:
     st.info("⚪ Chưa có lệnh nào được đóng. Hãy vào lệnh phía trên và chờ hệ thống Chốt lời / Cắt lỗ.")
 
-# --- 8. AUTO REFRESH LOOP ---
+# --- 7. AUTO REFRESH LOOP ---
 if auto_refresh:
     if (datetime.now() - st.session_state.last_refresh).seconds >= refresh_sec:
         st.session_state.last_refresh = datetime.now(); st.rerun()
