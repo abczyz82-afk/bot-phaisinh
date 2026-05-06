@@ -82,35 +82,25 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["macd_signal"] = ema(np.nan_to_num(df["macd"].values), 9)
     df["macd_hist"] = df["macd"] - df["macd_signal"]
 
-    # --- SỬA LỖI TÍNH TOÁN ADX BẰNG VECTOR HÓA PANDAS ---
     df['prev_close'] = df['close'].shift(1)
     df['tr1'] = df['high'] - df['low']
     df['tr2'] = (df['high'] - df['prev_close']).abs()
     df['tr3'] = (df['low'] - df['prev_close']).abs()
     df['tr'] = df[['tr1', 'tr2', 'tr3']].max(axis=1)
-
     df['up_move'] = df['high'] - df['high'].shift(1)
     df['down_move'] = df['low'].shift(1) - df['low']
     df['+dm'] = np.where((df['up_move'] > df['down_move']) & (df['up_move'] > 0), df['up_move'], 0)
     df['-dm'] = np.where((df['down_move'] > df['up_move']) & (df['down_move'] > 0), df['down_move'], 0)
-
-    # Wilder's Smoothing bằng Exponential Moving Average (alpha=1/period)
     rma = lambda s, p: s.ewm(alpha=1/p, min_periods=p, adjust=False).mean()
-    
     df['atr14'] = rma(df['tr'], 14)
     df['+dm14'] = rma(df['+dm'], 14)
     df['-dm14'] = rma(df['-dm'], 14)
-
     df['di_pos'] = 100 * (df['+dm14'] / df['atr14'])
     df['di_neg'] = 100 * (df['-dm14'] / df['atr14'])
     df['dx'] = 100 * (df['di_pos'] - df['di_neg']).abs() / (df['di_pos'] + df['di_neg'])
     df['adx'] = rma(df['dx'], 14)
-
-    # Dọn dẹp cột tạm thời
     df.drop(['prev_close', 'tr1', 'tr2', 'tr3', 'tr', 'up_move', 'down_move', '+dm', '-dm', '+dm14', '-dm14', 'atr14', 'dx'], axis=1, inplace=True)
-    # ----------------------------------------------------
 
-    # LƯU CÁC SỰ KIỆN CẮT NHAU VÀO DATAFRAME ĐỂ VẼ BIỂU ĐỒ
     df["ema_buy"] = (df["ema9"] > df["ema21"]) & (df["ema9"].shift(1) <= df["ema21"].shift(1))
     df["ema_sell"] = (df["ema9"] < df["ema21"]) & (df["ema9"].shift(1) >= df["ema21"].shift(1))
     df["macd_buy"] = (df["macd_hist"] > 0) & (df["macd_hist"].shift(1) <= 0)
@@ -119,7 +109,6 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["bb_break_dn"] = (df["close"] < df["bb_lower"]) & (df["close"].shift(1) >= df["bb_lower"].shift(1))
     df["buy_signal"] = df["ema_buy"] & (df["rsi"] > 40)
     df["sell_signal"] = df["ema_sell"] & (df["rsi"] < 60)
-    
     df["vol_ma"] = pd.Series(df["volume"].values).rolling(20).mean().values
     return df
 
@@ -206,7 +195,11 @@ def build_chart(df: pd.DataFrame, title: str, show_ema: bool, show_bb: bool, sho
             if t["status"] == "OPEN":
                 c = "#00e676" if t["direction"] == "LONG" else "#ff5252"
                 fig.add_hline(y=t["entry"], line_color=c, line_width=1.5, row=1, col=1, annotation_text=f"ENTRY", annotation_font_color=c)
-                fig.add_hline(y=t["tp"], line_color="#00e676", line_width=1, line_dash="dash", row=1, col=1, annotation_text=f"TP", annotation_font_color="#00e676")
+                # Vẽ 3 đường TP
+                fig.add_hline(y=t["tp1"], line_color="#00e676", line_width=1, line_dash="dash", row=1, col=1, annotation_text=f"TP1", annotation_font_color="#00e676")
+                fig.add_hline(y=t["tp2"], line_color="#00e676", line_width=1, line_dash="dash", row=1, col=1, annotation_text=f"TP2", annotation_font_color="#00e676")
+                fig.add_hline(y=t["tp3"], line_color="#00e676", line_width=1, line_dash="dash", row=1, col=1, annotation_text=f"TP3", annotation_font_color="#00e676")
+                # Vẽ SL
                 fig.add_hline(y=t["sl"], line_color="#ff5252", line_width=1, line_dash="dash", row=1, col=1, annotation_text=f"SL", annotation_font_color="#ff5252")
 
     v_col = ["rgba(0,230,118,0.55)" if c >= o else "rgba(255,82,82,0.55)" for c, o in zip(df["close"], df["open"])]
@@ -228,11 +221,12 @@ def build_chart(df: pd.DataFrame, title: str, show_ema: bool, show_bb: bool, sho
 # ─────────────────────────────────────────────
 # LOGIC QUẢN LÝ LỆNH TỰ ĐỘNG & BẢNG THỐNG KÊ
 # ─────────────────────────────────────────────
-def add_trade(direction, entry, tp, sl, size):
+def add_trade(direction, entry, tp1, tp2, tp3, sl, size):
     st.session_state.trade_history.insert(0, {
         "id": len(st.session_state.trade_history)+1, "date": datetime.now().strftime("%d/%m/%Y"),
         "time": datetime.now().strftime("%H:%M:%S"), "exit_time": "-", 
-        "direction": direction, "entry": entry, "tp": tp, "sl": sl, "size": size, 
+        "direction": direction, "entry": entry, 
+        "tp1": tp1, "tp2": tp2, "tp3": tp3, "sl": sl, "size": size, 
         "status": "OPEN", "exit_price": 0.0, "pnl_points": 0.0, "reason": "-"
     })
 
@@ -247,14 +241,15 @@ def close_trade(idx, exit_price, reason="Đóng thủ công"):
         t["pnl_points"] = pts
         t["pnl"] = pts * t["size"] * 100_000
 
-def auto_check_trades(current_price):
+def auto_check_trades(current_price, target_tp_key):
     for i, t in enumerate(st.session_state.trade_history):
         if t["status"] == "OPEN":
+            active_tp = t[target_tp_key] # Lấy giá trị của tp1, tp2 hoặc tp3 theo cài đặt
             if t["direction"] == "LONG":
-                if current_price >= t["tp"]: close_trade(i, t["tp"], "🎯 Chốt Lời (TP)")
+                if current_price >= active_tp: close_trade(i, active_tp, f"🎯 Chạm {target_tp_key.upper()}")
                 elif current_price <= t["sl"]: close_trade(i, t["sl"], "🛡️ Cắt Lỗ (SL)")
             elif t["direction"] == "SHORT":
-                if current_price <= t["tp"]: close_trade(i, t["tp"], "🎯 Chốt Lời (TP)")
+                if current_price <= active_tp: close_trade(i, active_tp, f"🎯 Chạm {target_tp_key.upper()}")
                 elif current_price >= t["sl"]: close_trade(i, t["sl"], "🛡️ Cắt Lỗ (SL)")
 
 # ─────────────────────────────────────────────
@@ -274,9 +269,18 @@ with st.sidebar:
 
     st.markdown('<div class="section-header">📐 QUẢN LÝ LỆNH & RỦI RO</div>', unsafe_allow_html=True)
     lot_size  = st.number_input("Số hợp đồng (Size)", min_value=1, max_value=50, value=1)
-    tp_points = st.number_input("Chốt lời (TP) - Điểm", min_value=1.0, max_value=50.0, value=8.0, step=0.5)
+    
+    # 🌟 CÀI ĐẶT 3 MỐC TP 🌟
+    col_tp1, col_tp2 = st.columns(2)
+    tp1_points = col_tp1.number_input("TP 1 (Điểm)", min_value=1.0, max_value=50.0, value=4.0, step=0.5)
+    tp2_points = col_tp2.number_input("TP 2 (Điểm)", min_value=1.0, max_value=50.0, value=8.0, step=0.5)
+    tp3_points = st.number_input("TP 3 (Điểm)", min_value=1.0, max_value=50.0, value=12.0, step=0.5)
     sl_points = st.number_input("Cắt lỗ (SL) - Điểm", min_value=1.0, max_value=30.0, value=4.0, step=0.5)
-    st.markdown(f'<div style="color:#ffd600;font-family:JetBrains Mono;font-size:12px;margin-top:-10px">Tỉ lệ R:R = 1 : {tp_points/sl_points:.1f}</div>', unsafe_allow_html=True)
+    
+    # Mục tiêu chốt lời tự động
+    auto_tp_target = st.selectbox("Bot tự động chốt lời tại:", ["TP1", "TP2", "TP3"], index=2)
+    
+    st.markdown(f'<div style="color:#ffd600;font-family:JetBrains Mono;font-size:12px;margin-top:-5px">Tỉ lệ R:R (TP1) = 1 : {tp1_points/sl_points:.1f}</div>', unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
 # GIAO DIỆN CHÍNH (MAIN APP)
@@ -288,7 +292,8 @@ df1, df5 = add_indicators(df1), add_indicators(df5)
 current_price, prev_close = df1["close"].iloc[-1], df1["close"].iloc[-2]
 regime1, regime5 = detect_regime(df1), detect_regime(df5)
 
-auto_check_trades(current_price)
+# KÍCH HOẠT QUÉT LỆNH TỰ ĐỘNG VỚI MỤC TIÊU ĐƯỢC CHỌN
+auto_check_trades(current_price, auto_tp_target.lower())
 
 # --- 1. DẢI BĂNG THÔNG SỐ (METRICS) ---
 h1, h2, h3, h4, h5, h6 = st.columns([2.2, 1.5, 1.4, 1.4, 1.4, 1.4])
@@ -356,9 +361,13 @@ with trade_col:
     
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("🟢 BUY (LONG)", use_container_width=True): add_trade("LONG", entry_price, entry_price+tp_points, entry_price-sl_points, lot_size); st.rerun()
+        if st.button("🟢 BUY (LONG)", use_container_width=True): 
+            add_trade("LONG", entry_price, entry_price+tp1_points, entry_price+tp2_points, entry_price+tp3_points, entry_price-sl_points, lot_size)
+            st.rerun()
     with c2:
-        if st.button("🔴 SELL (SHORT)", use_container_width=True): add_trade("SHORT", entry_price, entry_price-tp_points, entry_price+sl_points, lot_size); st.rerun()
+        if st.button("🔴 SELL (SHORT)", use_container_width=True): 
+            add_trade("SHORT", entry_price, entry_price-tp1_points, entry_price-tp2_points, entry_price-tp3_points, entry_price+sl_points, lot_size)
+            st.rerun()
 
     st.markdown('<div class="section-header" style="margin-top:14px">📋 LỆNH ĐANG MỞ (OPEN)</div>', unsafe_allow_html=True)
     
@@ -367,7 +376,15 @@ with trade_col:
         if t["status"] == "OPEN":
             open_trades_exist = True
             live_pnl = (current_price - t['entry']) * (1 if t['direction']=='LONG' else -1)
-            st.markdown(f"<div style='background:#111827;border:1px solid #1e2d4a;padding:10px;margin-top:6px;font-size:11px;font-family:JetBrains Mono;'><span style='color:{'#00e676' if t['direction']=='LONG' else '#ff5252'}'><b>#{t['id']} {t['direction']}</b></span> <span style='float:right;color:#ffd600'>ĐANG MỞ</span><br><span style='color:#94a3b8'>Entry: {t['entry']:.2f} | <span style='color:{'#00e676' if live_pnl >= 0 else '#ff5252'}'>Lãi/Lỗ: {live_pnl:+.1f}</span></span><br><span style='color:#64748b'>TP:{t['tp']:.2f} SL:{t['sl']:.2f}</span></div>", unsafe_allow_html=True)
+            st.markdown(f"""
+            <div style='background:#111827;border:1px solid #1e2d4a;padding:10px;margin-top:6px;font-size:11px;font-family:JetBrains Mono;'>
+                <span style='color:{'#00e676' if t['direction']=='LONG' else '#ff5252'}'><b>#{t['id']} {t['direction']}</b></span> 
+                <span style='float:right;color:#ffd600'>ĐANG MỞ</span><br>
+                <span style='color:#94a3b8'>Entry: {t['entry']:.2f} | <span style='color:{'#00e676' if live_pnl >= 0 else '#ff5252'}'>Lãi/Lỗ: {live_pnl:+.1f}</span></span><br>
+                <span style='color:#64748b'>TP1: {t['tp1']:.1f} | TP2: {t['tp2']:.1f} | TP3: {t['tp3']:.1f}</span><br>
+                <span style='color:#ff5252'>SL: {t['sl']:.1f}</span>
+            </div>
+            """, unsafe_allow_html=True)
             if st.button(f"Đóng lệnh #{t['id']} thủ công", key=f"close_{i}"): close_trade(i, current_price, "Đóng thủ công"); st.rerun()
     if not open_trades_exist:
         st.markdown("<div style='color:#475569;font-size:12px;font-family:JetBrains Mono'>Chưa có lệnh nào đang mở.</div>", unsafe_allow_html=True)
@@ -379,7 +396,7 @@ with trade_col:
         for t in closed_trades:
             pnl_color = "#00e676" if t["pnl_points"] >= 0 else "#ff5252"
             dir_color = "#00e676" if t["direction"] == "LONG" else "#ff5252"
-            reason_icon = "🎯" if "Chốt" in t["reason"] else ("🛡️" if "Cắt" in t["reason"] else "👋")
+            reason_icon = "🎯" if "Chạm" in t["reason"] else ("🛡️" if "Cắt" in t["reason"] else "👋")
             st.markdown(f"""
             <div style='background:#111827;border:1px solid #1e2d4a;padding:10px;margin-top:6px;font-size:11px;font-family:JetBrains Mono;'>
                 <div style='display:flex;justify-content:space-between;margin-bottom:4px;'>
