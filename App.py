@@ -126,7 +126,7 @@ def draw_gauge(score):
                 {'range': [-100, -70], 'color': "#ef4444"},
                 {'range': [-70, -30], 'color': "#7f1d1d"},
                 {'range': [-30, 30], 'color': "#1e293b"},
-                {'range': 30, 70, 'color': "#064e3b"},
+                {'range': [30, 70], 'color': "#064e3b"},
                 {'range': [70, 100], 'color': "#22c55e"}
             ],
             'threshold': {'line': {'color': "white", 'width': 4}, 'thickness': 0.75, 'value': score}
