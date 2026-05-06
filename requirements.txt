@@ -3,5 +3,4 @@ plotly
 pandas
 numpy
 vnstock3
-ta
 pandas-ta
