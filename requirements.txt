@@ -1,7 +1,5 @@
 streamlit
 plotly
 pandas
-beautifulsoup4
-requests
-ipython
-vnstock==0.2.9.2.3
+vnstock
+ta
