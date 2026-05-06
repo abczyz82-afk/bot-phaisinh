@@ -393,6 +393,42 @@ with trade_col:
     st.markdown('<div class="section-header">🔫 VÀO LỆNH & QUẢN LÝ</div>', unsafe_allow_html=True)
     
     current_atr = df5["atr"].iloc[-1] if not np.isnan(df5["atr"].iloc[-1]) else 2.0
+    
+    # --- RỦI RO ---
+    active_sl_pts = current_atr * 1.0 if auto_sltp else sl_points
+    risk_amount = active_sl_pts * lot_size * 100_000
+    
+    risk_level = "THẤP"
+    risk_color = "#00e676"
+    risk_warnings = []
+    
+    if current_atr > 4.0:
+        risk_warnings.append("Biến động mạnh (ATR > 4), râu nến dài dễ quét SL.")
+    
+    if regime5["strength"] == "MẠNH":
+        if regime5["regime"] == "DOWNTREND": risk_warnings.append("Khung 5P đang DOWNTREND mạnh (Nguy hiểm nếu LONG).")
+        elif regime5["regime"] == "UPTREND": risk_warnings.append("Khung 5P đang UPTREND mạnh (Nguy hiểm nếu SHORT).")
+        
+    if risk_amount >= 2000000:
+        risk_level = "CAO"
+        risk_color = "#ff5252"
+        risk_warnings.append(f"Mức phạt SL khá lớn so với size {lot_size} HĐ.")
+    elif len(risk_warnings) > 0:
+        risk_level = "TRUNG BÌNH"
+        risk_color = "#ffd600"
+        
+    warning_html = "<br>".join([f"• {w}" for w in risk_warnings]) if risk_warnings else "• Biên độ an toàn, xu hướng ủng hộ."
+    
+    st.markdown(f"""
+    <div style='background:#111827; border:1px solid {risk_color}; border-radius:6px; padding:10px; margin-bottom:12px;'>
+        <div style='font-size:11px; color:{risk_color}; font-family:JetBrains Mono; font-weight:bold;'>⚠️ CẢNH BÁO RỦI RO LỆNH: {risk_level}</div>
+        <div style='font-size:10px; color:#94a3b8; font-family:JetBrains Mono; margin-top:6px; line-height:1.4;'>
+            Tổn thất tối đa (Nếu dính SL): <b style="color:#ff5252">-{risk_amount:,.0f} ₫</b><br>
+            {warning_html}
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
     if auto_sltp:
         calc_sl = current_atr * 1.0  
         calc_tp1 = current_atr * 1.0  
