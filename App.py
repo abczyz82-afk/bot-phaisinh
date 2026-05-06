@@ -93,7 +93,6 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df['-dm'] = np.where((df['down_move'] > df['up_move']) & (df['down_move'] > 0), df['down_move'], 0)
     rma = lambda s, p: s.ewm(alpha=1/p, min_periods=p, adjust=False).mean()
     
-    # 🌟 Giữ lại ATR để làm thước đo tự động tính SL/TP 🌟
     df['atr'] = rma(df['tr'], 14)
     df['+dm14'] = rma(df['+dm'], 14)
     df['-dm14'] = rma(df['-dm'], 14)
@@ -144,7 +143,12 @@ def detect_regime(df: pd.DataFrame) -> dict:
     )
     if np.isnan(adx): adx = 20
 
-    if adx < 22 or bb_w < 0.015: regime, strength = "SIDEWAY", "YẾU" if adx < 18 else "VỪA"
+    # Lấy ngưỡng 15% của BB Width trong 50 nến gần nhất để xét Squeeze
+    hist_bb_w = df["bb_width"].dropna().tail(50)
+    sqz_thresh = hist_bb_w.quantile(0.15) if len(hist_bb_w) > 10 else 0.0
+    is_sqz = bb_w < sqz_thresh
+
+    if adx < 22: regime, strength = "SIDEWAY", "YẾU" if adx < 18 else "VỪA"
     elif di_pos > di_neg: regime, strength = "UPTREND", "MẠNH" if adx > 35 else "VỪA"
     else: regime, strength = "DOWNTREND", "MẠNH" if adx > 35 else "VỪA"
 
@@ -154,11 +158,9 @@ def detect_regime(df: pd.DataFrame) -> dict:
     if rsi < 30: signals.append(("🟢", f"RSI Oversold ({rsi:.1f})", "CẢNH BÁO"))
     elif rsi > 70: signals.append(("🔴", f"RSI Overbought ({rsi:.1f})", "CẢNH BÁO"))
     
-    hist_bb_w = df["bb_width"].dropna().tail(50)
-    if len(hist_bb_w) > 10 and bb_w < hist_bb_w.quantile(0.15):
-        signals.append(("⚡", "BB Squeeze (Nén giá)", "WATCH"))
+    if is_sqz: signals.append(("⚡", "BB Squeeze (Nén giá)", "WATCH"))
 
-    return {"regime": regime, "strength": strength, "adx": adx, "di_pos": di_pos, "di_neg": di_neg, "rsi": rsi, "ema9": ema9, "ema21": ema21, "signals": signals, "last_time": last_time}
+    return {"regime": regime, "strength": strength, "adx": adx, "di_pos": di_pos, "di_neg": di_neg, "rsi": rsi, "ema9": ema9, "ema21": ema21, "bb_w": bb_w, "sqz_thresh": sqz_thresh, "is_sqz": is_sqz, "signals": signals, "last_time": last_time}
 
 # ─────────────────────────────────────────────
 # BIỂU ĐỒ NẾN + TOGGLE BẬT TẮT CHỈ BÁO
@@ -267,12 +269,11 @@ with st.sidebar:
     st.markdown('<div class="section-header">🤖 BOT TỰ TÍNH RỦI RO</div>', unsafe_allow_html=True)
     lot_size  = st.number_input("Số hợp đồng (Size)", min_value=1, max_value=50, value=1)
     
-    # NÚT GẠT ĐỂ CHỌN: TỰ TÍNH (ATR) HOẶC THỦ CÔNG
     auto_sltp = st.toggle("🤖 Bot tự động tính SL/TP (Theo ATR)", value=True)
     
     if auto_sltp:
         st.info("💡 Bot đang đo lường biến động thị trường (ATR) để thiết lập Biên độ Cắt lỗ & 3 mốc Chốt lời tự động.")
-        sl_pts = 0.0 # Sẽ tính toán ở bên dưới
+        sl_pts = 0.0 
     else:
         col_tp1, col_tp2 = st.columns(2)
         tp1_points = col_tp1.number_input("TP 1 (Điểm)", min_value=1.0, max_value=50.0, value=4.0, step=0.5)
@@ -318,7 +319,41 @@ c_r1, c_r5 = st.columns(2)
 with c_r1: st.markdown(regime_banner(regime1, "KHUNG 1 PHÚT"), unsafe_allow_html=True)
 with c_r5: st.markdown(regime_banner(regime5, "KHUNG 5 PHÚT"), unsafe_allow_html=True)
 
-# --- 3. BẢNG TRẠNG THÁI HIỆN TẠI TẠI (TREN CÙNG) ---
+# --- 2.5 BẢNG LOGIC & PHÂN TÍCH THỊ TRƯỜNG HIỆN TẠI ---
+st.markdown('<div class="section-header" style="margin-top:20px">🧠 BẢNG TIÊU CHÍ & PHÂN TÍCH THỊ TRƯỜNG TRỰC TIẾP</div>', unsafe_allow_html=True)
+
+col_logic, col_calc = st.columns([1.2, 1.8])
+with col_logic:
+    st.markdown("""
+    <div style='background:#0f1526; border:1px solid #1e2d4a; border-radius:8px; padding:12px; font-family:JetBrains Mono; font-size:12px;'>
+        <div style='color:#38bdf8; font-weight:bold; margin-bottom:8px;'>📌 BẢNG TIÊU CHÍ XU HƯỚNG</div>
+        <span style='color:#ffd600'>ADX < 22</span> ➔ SIDEWAY<br>
+        <span style='color:#00e676'>ADX ≥ 22 + DI+ > DI-</span> ➔ UPTREND<br>
+        <span style='color:#ff5252'>ADX ≥ 22 + DI- > DI+</span> ➔ DOWNTREND<br><br>
+        <span style='color:#a78bfa'>BB Width < Percentile 15%</span> ➔ BB Squeeze<br>
+        <span style='color:#64748b; font-size:10px;'>(Chuẩn bị breakout)</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+with col_calc:
+    r5 = regime5
+    adx_val, dip, din, bbw, sqz = r5['adx'], r5['di_pos'], r5['di_neg'], r5['bb_w'], r5['sqz_thresh']
+    
+    adx_text = f"<span style='color:#ffd600'>ADX = {adx_val:.1f} (< 22) ➔ SIDEWAY</span>" if adx_val < 22 else (f"<span style='color:#00e676'>ADX = {adx_val:.1f} (≥ 22) & DI+ > DI- ➔ UPTREND</span>" if dip > din else f"<span style='color:#ff5252'>ADX = {adx_val:.1f} (≥ 22) & DI- > DI+ ➔ DOWNTREND</span>")
+    bb_text = f"<span style='color:#a78bfa'>BB Width ({bbw:.4f}) < Mốc 15% ({sqz:.4f}) ➔ ĐANG NÉN GIÁ (SQUEEZE)</span>" if r5['is_sqz'] else f"<span style='color:#64748b'>BB Width ({bbw:.4f}) > Mốc 15% ({sqz:.4f}) ➔ Biên độ mở</span>"
+    
+    st.markdown(f"""
+    <div style='background:#111827; border:1px solid #1e2d4a; border-radius:8px; padding:12px; font-family:JetBrains Mono; font-size:12px;'>
+        <div style='color:#38bdf8; font-weight:bold; margin-bottom:8px;'>⚙️ TÍNH TOÁN HIỆN TẠI (KHUNG 5 PHÚT)</div>
+        • {adx_text}<br>
+        • DI+ = {dip:.1f} | DI- = {din:.1f}<br>
+        • {bb_text}<br>
+        <hr style="border-color:#1e2d4a; margin:8px 0;">
+        <div style='color:#e2e8f0;'><b>Kết luận Bot:</b> Đang ở trạng thái <b style="color:#ffd600">{r5['regime']}</b>. Tín hiệu Squeeze: <b>{"CÓ (Chờ Breakout)" if r5['is_sqz'] else "KHÔNG"}</b>.</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+# --- 3. BẢNG TRẠNG THÁI CẢNH BÁO HIỆN TẠI ---
 all_sigs = [(*s, "1P", regime1["last_time"]) for s in regime1["signals"]] + [(*s, "5P", regime5["last_time"]) for s in regime5["signals"]]
 if all_sigs:
     st.markdown('<div class="section-header" style="margin-top:10px">🎯 TRẠNG THÁI CẢNH BÁO HIỆN TẠI (TRÊN NẾN CUỐI CÙNG)</div>', unsafe_allow_html=True)
@@ -358,13 +393,12 @@ with chart_col:
 with trade_col:
     st.markdown('<div class="section-header">🔫 VÀO LỆNH NHANH</div>', unsafe_allow_html=True)
     
-    # 🌟 HIỂN THỊ THÔNG SỐ TÍNH TOÁN BỞI BOT (NẾU BẬT AUTO) 🌟
     current_atr = df5["atr"].iloc[-1] if not np.isnan(df5["atr"].iloc[-1]) else 2.0
     if auto_sltp:
-        calc_sl = current_atr * 1.0   # Tỷ lệ Rủi ro 1 phần (Cắt lỗ sớm)
-        calc_tp1 = current_atr * 1.0  # Tỷ lệ Lợi nhuận 1 phần (Hòa vốn)
-        calc_tp2 = current_atr * 2.0  # Tỷ lệ Lợi nhuận 2 phần
-        calc_tp3 = current_atr * 3.0  # Tỷ lệ Lợi nhuận 3 phần
+        calc_sl = current_atr * 1.0  
+        calc_tp1 = current_atr * 1.0  
+        calc_tp2 = current_atr * 2.0  
+        calc_tp3 = current_atr * 3.0  
         
         st.markdown(f"""
         <div style='background:#0f1526; border:1px dashed #38bdf8; border-radius:6px; padding:10px; margin-bottom:12px;'>
