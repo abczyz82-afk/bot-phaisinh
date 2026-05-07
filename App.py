@@ -277,7 +277,7 @@ def detect_candle_patterns(df: pd.DataFrame) -> list:
     at_bb_low, at_bb_high = cl0 <= bb_lo_val * 1.002, cl0 >= bb_up_val * 0.998
     vol_spike = float(c0.get("volume",0)) > float(c0.get("vol_ma",1))*1.5
 
-     def add(name, bias, desc):
+    def add(name, bias, desc):
         base = PATTERN_BASE_RELIABILITY.get(name, 55)
         cb   = ctx_bonus(bias)
         rel  = min(base + cb, 95)
