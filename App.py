@@ -783,76 +783,54 @@ c_r1, c_r5 = st.columns(2)
 def reg_ban(r, lbl):
     css, icon, d = ({"UPTREND":("uptrend","🚀","Ưu tiên LONG"), "DOWNTREND":("downtrend","💥","Ưu tiên SHORT")}).get(r["regime"],("sideway","🔄","Đánh biên"))
     return f'<div class="signal-card {css}">{icon} [{lbl}] {r["regime"]} — {r["strength"]}<br><span style="font-size:10px;font-weight:400">{d} | ADX {r["adx"]:.1f} | DI+ {r["di_pos"]:.1f} DI- {r["di_neg"]:.1f}</span></div>'
+
 with c_r1: st.markdown(reg_ban(regime1,"1 PHÚT"), unsafe_allow_html=True)
 with c_r5: st.markdown(reg_ban(regime5,"5 PHÚT"), unsafe_allow_html=True)
 
+# ── BẢNG TIÊU CHÍ XU HƯỚNG & TÍNH TOÁN THỰC TẾ ──
+# (Đoạn này phải nằm sát lề trái, không được thụt lề)
+st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+with st.expander("📐 BẢNG TIÊU CHÍ XU HƯỚNG & TÍNH TOÁN THỰC TẾ (5P)", expanded=True):
+    cl, cr = st.columns(2)
+    with cl:
+        st.markdown("""
+        <div style='background:#0f1626;border:1px solid #1a2540;border-radius:8px;padding:12px;font-family:JetBrains Mono;font-size:12px'>
+          <div style='color:#38bdf8;font-weight:bold;margin-bottom:8px'>📌 BẢNG TIÊU CHÍ</div>
+          <span style='color:#ffd600'>ADX < 22</span> ➔ SIDEWAY<br>
+          <span style='color:#00e676'>ADX ≥ 22 + DI+ > DI-</span> ➔ UPTREND<br>
+          <span style='color:#ff5252'>ADX ≥ 22 + DI- > DI+</span> ➔ DOWNTREND<br><br>
+          <span style='color:#a78bfa'>BB Width < Percentile 15%</span> ➔ BB Squeeze<br>
+          <span style='color:#00e676'>Score ≥ +70</span> ➔ KHUYẾN NGHỊ LONG MẠNH<br>
+          <span style='color:#ff5252'>Score ≤ -70</span> ➔ KHUYẾN NGHỊ SHORT MẠNH<br>
+        </div>""", unsafe_allow_html=True)
+    with cr:
+        r5 = regime5
+        adx_text = (f"<span style='color:#ffd600'>ADX={r5['adx']:.1f} < 22 ➔ SIDEWAY</span>" if r5["adx"]<22
+                    else (f"<span style='color:#00e676'>ADX={r5['adx']:.1f} ≥ 22 & DI+>DI- ➔ UP</span>" if r5["di_pos"]>r5["di_neg"]
+                          else f"<span style='color:#ff5252'>ADX={r5['adx']:.1f} ≥ 22 & DI->DI+ ➔ DOWN</span>"))
+        
+        bb_text = (f"<span style='color:#a78bfa'>BB({r5['bb_w']:.4f}) < p15({r5['sqz_thresh']:.4f}) → SQUEEZE</span>" if r5["is_sqz"]
+                   else f"<span style='color:#475569'>BB({r5['bb_w']:.4f}) ≥ p15({r5['sqz_thresh']:.4f}) → Biên độ mở</span>")
+        
+        div1_status = 'CÓ ▲' if confluence['div1']['bull'] else ('CÓ ▼' if confluence['div1']['bear'] else 'KHÔNG')
+        va_bias = confluence["va"]["bias"]
+        va_color = "#00e676" if va_bias=="BULL" else ("#ff5252" if va_bias=="BEAR" else "#64748b")
+        score_color = "#00e676" if score>0 else "#ff5252"
+
+        st.markdown(f"""
+        <div style='background:#0f1626;border:1px solid #1a2540;border-radius:8px;padding:12px;font-family:JetBrains Mono;font-size:12px'>
+          <div style='color:#38bdf8;font-weight:bold;margin-bottom:8px'>⚙️ TÍNH TOÁN 5P HIỆN TẠI</div>
+          • {adx_text}<br>
+          • DI+={r5['di_pos']:.1f} | DI-={r5['di_neg']:.1f}<br>
+          • {bb_text}<br>
+          <hr style='border-color:#1a2540;margin:6px 0'>
+          • Divergence 1P: <b style='color:{"#00e676" if "▲" in div1_status else "#ff5252" if "▼" in div1_status else "#475569"}'>{div1_status}</b><br>
+          • Volume Bias: <b style='color:{va_color}'>{va_bias}</b><br>
+          • Score: <b style='color:{score_color}'>{score:+d}</b> → {confluence['rec']}
+        </div>""", unsafe_allow_html=True)
+
 # ── CHART & PANELS ──
 chart_col, trade_col = st.columns([3.2, 1.2])
-
-with chart_col:
-    tab1, tab5, tab_pat, tab_wr = st.tabs(["📊 Biểu đồ 1P", "📊 Biểu đồ 5P", "🕯️ Mẫu Nến", "📈 Win Rate (Hiệu suất)"])
-    with tab1: st.plotly_chart(build_chart(df1, "VN30F1M · 1P", show_ema, show_bb, show_signals, show_trades, show_vwap, show_vwap_bands, show_patterns, score, pat_hist1), use_container_width=True, config={"displayModeBar":False})
-    with tab5: st.plotly_chart(build_chart(df5, "VN30F1M · 5P", show_ema, show_bb, show_signals, show_trades, show_vwap, show_vwap_bands, show_patterns, score, pat_hist5), use_container_width=True, config={"displayModeBar":False})
-    
-    with tab_pat:
-        st.markdown('<div class="sec-hdr">MẪU NẾN ĐANG XUẤT HIỆN</div>', unsafe_allow_html=True)
-        cur = [(p,"1P") for p in detect_candle_patterns(df1)] + [(p,"5P") for p in detect_candle_patterns(df5)]
-        if cur:
-            for p, tf in cur:
-                bc = "#00e676" if p["bias"]=="BULL" else "#ff5252" if p["bias"]=="BEAR" else "#ffd600"
-                st.markdown(f'<div style="background:#0f1626;border-left:3px solid {bc};padding:10px;margin-bottom:5px;font-family:JetBrains Mono;font-size:11px"><b style="color:{bc}">[{tf}] {p["name"]}</b> — {p["desc"]}<br>Tin cậy: {p["reliability"]}% (Chất lượng {p["quality"]})</div>', unsafe_allow_html=True)
-        else: st.info("Không có mẫu nến đặc biệt ở nến hiện tại.")
-        st.markdown('<div class="sec-hdr" style="margin-top:15px">LỊCH SỬ MẪU NẾN (120 NẾN GẦN NHẤT)</div>', unsafe_allow_html=True)
-        all_h = sorted([(p,"1P") for p in pat_hist1] + [(p,"5P") for p in pat_hist5], key=lambda x: x[0]["time"], reverse=True)
-        for p, tf in all_h[:20]:
-            bc = "#00e676" if p["bias"]=="BULL" else "#ff5252" if p["bias"]=="BEAR" else "#ffd600"
-            st.markdown(f'<div style="background:#0f1626;border-left:3px solid {bc};padding:8px;margin-bottom:3px;font-family:JetBrains Mono;font-size:11px"><span style="color:{bc}"><b>{p["name"]}</b></span> <span style="color:#64748b">[{tf}] {p["time"].strftime("%d/%m %H:%M")} | Độ tin cậy: {p["reliability"]}%</span></div>', unsafe_allow_html=True)
-
-    with tab_wr:
-        wr = compute_winrate()
-        if wr["total"] == 0: st.info("Chưa có lệnh đóng.")
-        else:
-            c1,c2,c3,c4 = st.columns(4)
-            c1.markdown(f'<div class="metric-box"><div class="metric-label">Win Rate</div><div class="metric-value" style="color:{"#00e676" if wr["win_rate"]>=50 else "#ff5252"}">{wr["win_rate"]:.1f}%</div></div>', unsafe_allow_html=True)
-            c2.markdown(f'<div class="metric-box"><div class="metric-label">Tổng P&L</div><div class="metric-value" style="color:{"#00e676" if wr["total_pnl"]>=0 else "#ff5252"}">{wr["total_pnl"]:+.1f}đ</div></div>', unsafe_allow_html=True)
-            c3.markdown(f'<div class="metric-box"><div class="metric-label">Profit Factor</div><div class="metric-value" style="color:{"#00e676" if wr["profit_factor"]>1 else "#ff5252"}">{wr["profit_factor"]:.2f}</div></div>', unsafe_allow_html=True)
-            c4.markdown(f'<div class="metric-box"><div class="metric-label">Max Drawdown</div><div class="metric-value" style="color:#ff5252">{wr["max_drawdown"]:.1f}đ</div></div>', unsafe_allow_html=True)
-            if wr["equity_curve"]:
-                eq_df = pd.DataFrame(wr["equity_curve"])
-                fig_eq = go.Figure(go.Scatter(x=eq_df["label"], y=eq_df["eq"], fill="tozeroy", fillcolor="rgba(0,230,118,0.08)", line=dict(color="#00e676")))
-                fig_eq.update_layout(template="plotly_dark", paper_bgcolor="#080c18", plot_bgcolor="#080c18", margin=dict(l=0,r=0,t=28,b=0), height=200, title="Đường Vốn (Equity Curve)")
-                st.plotly_chart(fig_eq, use_container_width=True, config={"displayModeBar":False})
-
-with trade_col:
-    st.markdown('<div class="sec-hdr">🔫 VÀO LỆNH & QUẢN LÝ</div>', unsafe_allow_html=True)
-    active_sl = current_atr*1.0 if auto_sltp else sl_points
-    risk = active_sl*lot_size*100000
-    st.markdown(f'<div style="background:#0f1626;border-left:3px solid {"#ff5252" if risk>2000000 else "#ffd600"};border-radius:6px;padding:10px;margin-bottom:10px;font-family:JetBrains Mono;font-size:11px"><div style="color:#64748b">Rủi ro (SL): <b style="color:#ff5252">-{risk:,.0f} ₫</b></div></div>', unsafe_allow_html=True)
-
-    if auto_sltp:
-        tp1, tp2, tp3, sl = current_atr*1.0, current_atr*2.0, current_atr*3.0, current_atr*1.0
-        st.markdown(f'<div style="background:#0f1626;border:1px dashed #38bdf8;border-radius:6px;padding:8px;margin-bottom:10px;font-family:JetBrains Mono;font-size:11px"><div style="color:#00e676">TP: +{tp1:.1f} | +{tp2:.1f} | +{tp3:.1f}</div><div style="color:#ff5252">SL: -{sl:.1f}</div></div>', unsafe_allow_html=True)
-    else:
-        tp1, tp2, tp3, sl = tp1_points, tp2_points, tp3_points, sl_points
-
-    ep = st.number_input("Giá", value=float(current_price), step=0.1)
-    c1, c2 = st.columns(2)
-    if c1.button("🟢 BUY (LONG)", use_container_width=True):
-        st.session_state.trade_history.insert(0, {"id":len(st.session_state.trade_history)+1,"date":datetime.now(VN_TZ).strftime("%d/%m"),"time":datetime.now(VN_TZ).strftime("%H:%M"),"direction":"LONG","entry":ep,"tp1":ep+tp1,"tp2":ep+tp2,"tp3":ep+tp3,"sl":ep-sl,"size":lot_size,"status":"OPEN","score":score,"regime":regime5["regime"]})
-        st.rerun()
-    if c2.button("🔴 SELL (SHORT)", use_container_width=True):
-        st.session_state.trade_history.insert(0, {"id":len(st.session_state.trade_history)+1,"date":datetime.now(VN_TZ).strftime("%d/%m"),"time":datetime.now(VN_TZ).strftime("%H:%M"),"direction":"SHORT","entry":ep,"tp1":ep-tp1,"tp2":ep-tp2,"tp3":ep-tp3,"sl":ep+sl,"size":lot_size,"status":"OPEN","score":score,"regime":regime5["regime"]})
-        st.rerun()
-
-    st.markdown('<div style="font-size:11px;color:#94a3b8;font-family:JetBrains Mono;margin:12px 0 6px;font-weight:700">📋 LỆNH ĐANG MỞ</div>', unsafe_allow_html=True)
-    for i, t in enumerate(st.session_state.trade_history):
-        if t["status"] == "OPEN":
-            live = (current_price-t["entry"]) * (1 if t["direction"]=="LONG" else -1)
-            dc = "#00e676" if t["direction"]=="LONG" else "#ff5252"
-            st.markdown(f'<div style="background:#0f1626;border-left:2px solid {dc};padding:8px;margin-bottom:5px;font-size:10px;font-family:JetBrains Mono"><b style="color:{dc}">#{t["id"]} {t["direction"]}</b> | Entry: {t["entry"]:.2f} <br>Lãi/Lỗ: <span style="color:{"#00e676" if live>=0 else "#ff5252"}">{live:+.1f}</span></div>', unsafe_allow_html=True)
-            if st.button(f"Đóng #{t['id']}", key=f"cl_{i}"):
-                t.update({"status":"CLOSED", "exit_price":current_price, "reason":"Đóng thủ công", "exit_time":datetime.now(VN_TZ).strftime("%H:%M"), "pnl_points":live}); t["pnl"]=live*t["size"]*100000; st.rerun()
-
 # ══════════════════════════════════════════════════════════════
 # FOOTER & LOG
 # ══════════════════════════════════════════════════════════════
