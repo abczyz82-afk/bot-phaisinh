@@ -277,7 +277,25 @@ def detect_candle_patterns(df: pd.DataFrame) -> list:
     at_bb_low, at_bb_high = cl0 <= bb_lo_val * 1.002, cl0 >= bb_up_val * 0.998
     vol_spike = float(c0.get("volume",0)) > float(c0.get("vol_ma",1))*1.5
 
-     def add(name, bias, desc):
+    def ctx_bonus(bias):
+        """Điểm thưởng context: mẫu xuất hiện đúng vùng hỗ trợ/kháng cự."""
+        b = 0
+        if bias == "BULL":
+            if at_bb_low:  b += 12
+            if at_vwap_l2: b += 10
+        elif bias == "BEAR":
+            if at_bb_high: b += 12
+            if at_vwap_u2: b += 10
+        if vol_spike:  b += 8
+        if is_squeeze: b += 5
+        return b
+
+    def quality(reliability):
+        if reliability >= 80: return "A", "#00e676"
+        if reliability >= 65: return "B", "#ffd600"
+        return "C", "#f97316"
+
+    def add(name, bias, desc):
         base = PATTERN_BASE_RELIABILITY.get(name, 55)
         cb   = ctx_bonus(bias)
         rel  = min(base + cb, 95)
