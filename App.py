@@ -597,7 +597,46 @@ def reg_ban(r, lbl):
     return f'<div class="signal-card {css}">{icon} [{lbl}] {r["regime"]} — {r["strength"]}<br><span style="font-size:10px;font-weight:400">{d} | ADX {r["adx"]:.1f} | DI+ {r["di_pos"]:.1f} DI- {r["di_neg"]:.1f}</span></div>'
 with c_r1: st.markdown(reg_ban(regime1,"1 PHÚT"), unsafe_allow_html=True)
 with c_r5: st.markdown(reg_ban(regime5,"5 PHÚT"), unsafe_allow_html=True)
+# ── BẢNG TIÊU CHÍ XU HƯỚNG & TÍNH TOÁN THỰC TẾ ──
+st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+with st.expander("📐 BẢNG TIÊU CHÍ XU HƯỚNG & TÍNH TOÁN THỰC TẾ (5P)", expanded=True):
+    cl, cr = st.columns(2)
+    with cl:
+        st.markdown("""
+        <div style='background:#0f1626;border:1px solid #1a2540;border-radius:8px;padding:12px;font-family:JetBrains Mono;font-size:12px'>
+          <div style='color:#38bdf8;font-weight:bold;margin-bottom:8px'>📌 BẢNG TIÊU CHÍ</div>
+          <span style='color:#ffd600'>ADX < 22</span> ➔ SIDEWAY<br>
+          <span style='color:#00e676'>ADX ≥ 22 + DI+ > DI-</span> ➔ UPTREND<br>
+          <span style='color:#ff5252'>ADX ≥ 22 + DI- > DI+</span> ➔ DOWNTREND<br><br>
+          <span style='color:#a78bfa'>BB Width < Percentile 15%</span> ➔ BB Squeeze<br>
+          <span style='color:#00e676'>Score ≥ +70</span> ➔ KHUYẾN NGHỊ LONG MẠNH<br>
+          <span style='color:#ff5252'>Score ≤ -70</span> ➔ KHUYẾN NGHỊ SHORT MẠNH<br>
+        </div>""", unsafe_allow_html=True)
+    with cr:
+        r5 = regime5
+        adx_text = (f"<span style='color:#ffd600'>ADX={r5['adx']:.1f} < 22 ➔ SIDEWAY</span>" if r5["adx"]<22
+                    else (f"<span style='color:#00e676'>ADX={r5['adx']:.1f} ≥ 22 & DI+>DI- ➔ UP</span>" if r5["di_pos"]>r5["di_neg"]
+                          else f"<span style='color:#ff5252'>ADX={r5['adx']:.1f} ≥ 22 & DI->DI+ ➔ DOWN</span>"))
+        
+        bb_text = (f"<span style='color:#a78bfa'>BB({r5['bb_w']:.4f}) < p15({r5['sqz_thresh']:.4f}) → SQUEEZE</span>" if r5["is_sqz"]
+                   else f"<span style='color:#475569'>BB({r5['bb_w']:.4f}) ≥ p15({r5['sqz_thresh']:.4f}) → Biên độ mở</span>")
+        
+        div1_status = 'CÓ ▲' if confluence['div1']['bull'] else ('CÓ ▼' if confluence['div1']['bear'] else 'KHÔNG')
+        va_bias = confluence["va"]["bias"]
+        va_color = "#00e676" if va_bias=="BULL" else ("#ff5252" if va_bias=="BEAR" else "#64748b")
+        score_color = "#00e676" if score>0 else "#ff5252"
 
+        st.markdown(f"""
+        <div style='background:#0f1626;border:1px solid #1a2540;border-radius:8px;padding:12px;font-family:JetBrains Mono;font-size:12px'>
+          <div style='color:#38bdf8;font-weight:bold;margin-bottom:8px'>⚙️ TÍNH TOÁN 5P HIỆN TẠI</div>
+          • {adx_text}<br>
+          • DI+={r5['di_pos']:.1f} | DI-={r5['di_neg']:.1f}<br>
+          • {bb_text}<br>
+          <hr style='border-color:#1a2540;margin:6px 0'>
+          • Divergence 1P: <b style='color:{"#00e676" if "▲" in div1_status else "#ff5252" if "▼" in div1_status else "#475569"}'>{div1_status}</b><br>
+          • Volume Bias: <b style='color:{va_color}'>{va_bias}</b><br>
+          • Score: <b style='color:{score_color}'>{score:+d}</b> → {confluence['rec']}
+        </div>""", unsafe_allow_html=True)
 # ── CHART & PANELS ──
 chart_col, trade_col = st.columns([3.2, 1.2])
 
