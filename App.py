@@ -222,6 +222,10 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["cum_tv"] = (df["tp_"] * df["volume"]).groupby(df["date_"]).cumsum()
     df["cum_v"]  = df["volume"].groupby(df["date_"]).cumsum()
     df["vwap"]   = df["cum_tv"] / df["cum_v"].replace(0, np.nan)
+
+    # VWAP Standard Deviation Bands (±1σ, ±2σ)
+    # Variance tích lũy: Σ(vol × (tp - vwap)²) / Σvol
+    
     df["_tp_vwap_sq"] = df["volume"] * (df["tp_"] - df["vwap"]) ** 2
     df["_cum_var"]    = df["_tp_vwap_sq"].groupby(df["date_"]).cumsum()
     df["vwap_sd"]     = np.sqrt(df["_cum_var"] / df["cum_v"].replace(0, np.nan))
@@ -242,7 +246,21 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["bb_break_dn"] = (df["close"]<df["bb_lower"]) & (df["close"].shift(1)>=df["bb_lower"].shift(1))
     return df
 
-PATTERN_RELIABILITY = {"Morning Star":82,"Evening Star":80,"Three White Soldiers":78,"Three Black Crows":77,"Bull Engulfing":75,"Bear Engulfing":74,"Piercing Line":68,"Dark Cloud Cover":67,"Hammer":65,"Shooting Star":64,"Bullish Harami":60,"Bearish Harami":59,"Marubozu Bull":72,"Marubozu Bear":71,"Tweezer Bottom":63,"Tweezer Top":62,"Doji":55,"Spinning Top":50}
+# ══════════════════════════════════════════════════════════════
+# NHẬN DIỆN MẪU NẾN – 17 mẫu + context scoring
+# ══════════════════════════════════════════════════════════════
+# Độ tin cậy thống kê của từng mẫu (lịch sử nghiên cứu)
+PATTERN_BASE_RELIABILITY = {
+    "Morning Star":        82, "Evening Star":       80,
+    "Three White Soldiers":78, "Three Black Crows":  77,
+    "Bull Engulfing":      75, "Bear Engulfing":     74,
+    "Piercing Line":       68, "Dark Cloud Cover":   67,
+    "Hammer":              65, "Shooting Star":      64,
+    "Bullish Harami":      60, "Bearish Harami":     59,
+    "Marubozu Bull":       72, "Marubozu Bear":      71,
+    "Tweezer Bottom":      63, "Tweezer Top":        62,
+    "Doji":                55, "Spinning Top":       50,
+}
 
 def detect_candle_patterns(df: pd.DataFrame) -> list:
     patterns = []
@@ -259,25 +277,108 @@ def detect_candle_patterns(df: pd.DataFrame) -> list:
     at_bb_low, at_bb_high = cl0 <= bb_lo_val * 1.002, cl0 >= bb_up_val * 0.998
     vol_spike = float(c0.get("volume",0)) > float(c0.get("vol_ma",1))*1.5
 
-    def add(name, bias, desc):
-        cb = 0
-        if bias == "BULL": cb += 12 if at_bb_low else 0; cb += 10 if (vwap_l2>0 and cl0<=vwap_l2*1.003) else 0
-        elif bias == "BEAR": cb += 12 if at_bb_high else 0; cb += 10 if (vwap_u2<9998 and cl0>=vwap_u2*0.997) else 0
-        cb += 8 if vol_spike else 0; cb += 5 if is_squeeze else 0
-        rel = min(PATTERN_RELIABILITY.get(name, 55) + cb, 95)
-        ql, qc = ("A","#00e676") if rel>=80 else (("B","#ffd600") if rel>=65 else ("C","#f97316"))
-        patterns.append({"name":name,"bias":bias,"desc":desc,"reliability":rel,"context_bonus":cb,"quality":ql,"quality_color":qc})
+     def add(name, bias, desc):
+        base = PATTERN_BASE_RELIABILITY.get(name, 55)
+        cb   = ctx_bonus(bias)
+        rel  = min(base + cb, 95)
+        ql, qc = quality(rel)
+        patterns.append({
+            "name": name, "bias": bias, "desc": desc,
+            "reliability": rel, "context_bonus": cb,
+            "quality": ql, "quality_color": qc,
+        })
 
-    if (bd0/rg0<0.35) and (lw0/rg0>0.55) and (uw0/rg0<0.15) and cl1<o1: add("Hammer","BULL","Râu dưới dài ≥ 2× thân")
-    if (bd0/rg0<0.35) and (uw0/rg0>0.55) and (lw0/rg0<0.15) and cl1>o1: add("Shooting Star","BEAR","Râu trên dài ≥ 2× thân")
-    if cl1<o1 and cl0>o0 and cl0>o1 and o0<cl1 and bd0>bd1: add("Bull Engulfing","BULL","Xanh nuốt trọn đỏ")
-    if cl1>o1 and cl0<o0 and cl0<o1 and o0>cl1 and bd0>bd1: add("Bear Engulfing","BEAR","Đỏ nuốt trọn xanh")
-    if abs(lo0-lo1)/rg0<0.03 and cl1<o1 and cl0>o0: add("Tweezer Bottom","BULL","Chạm cùng đáy")
-    if abs(h0-h1)/rg0<0.03 and cl1>o1 and cl0<o0: add("Tweezer Top","BEAR","Chạm cùng đỉnh")
-    if cl2<o2 and bd2/rg2>0.5 and bd1/rg1<0.3 and cl0>o0 and cl0>=(o2+cl2)/2: add("Morning Star","BULL","Đỏ lớn → Nhỏ → Xanh lớn")
-    if cl2>o2 and bd2/rg2>0.5 and bd1/rg1<0.3 and cl0<o0 and cl0<=(o2+cl2)/2: add("Evening Star","BEAR","Xanh lớn → Nhỏ → Đỏ lớn")
-    if bd0/rg0<0.07: add("Doji","NEUTRAL","Do dự (Mở=Đóng)")
+     # ────────── 1-NẾN ──────────
+    # Hammer
+    if (bd0/rg0 < 0.35) and (lw0/rg0 > 0.55) and (uw0/rg0 < 0.15) and cl1 < o1:
+        add("Hammer","BULL","Nến búa – đảo chiều tăng tại đáy. Râu dưới dài ≥ 2× thân")
+
+    # Inverted Hammer (nến búa ngược)
+    if (bd0/rg0 < 0.35) and (uw0/rg0 > 0.55) and (lw0/rg0 < 0.15) and cl1 < o1:
+        add("Hammer","BULL","Inverted Hammer – xác nhận tăng nếu nến sau đóng cao hơn")
+
+    # Shooting Star
+    if (bd0/rg0 < 0.35) and (uw0/rg0 > 0.55) and (lw0/rg0 < 0.15) and cl1 > o1:
+        add("Shooting Star","BEAR","Nến sao băng – đảo chiều giảm tại đỉnh. Râu trên dài ≥ 2× thân")
+
+    # Doji
+    if bd0/rg0 < 0.07:
+        add("Doji","NEUTRAL","Do dự hoàn toàn – sắp đảo chiều. Mở=Đóng")
+
+    # Spinning Top (thân nhỏ, râu cả 2 phía)
+    if (bd0/rg0 < 0.25) and (uw0/rg0 > 0.2) and (lw0/rg0 > 0.2):
+        add("Spinning Top","NEUTRAL","Thân nhỏ, râu 2 phía – bull/bear đang giằng co")
+
+    # Marubozu Bull (nến xanh thân đầy, không râu)
+    if cl0 > o0 and bd0/rg0 > 0.88:
+        add("Marubozu Bull","BULL","Nến xanh thân đầy – lực mua áp đảo hoàn toàn")
+
+    # Marubozu Bear
+    if cl0 < o0 and bd0/rg0 > 0.88:
+        add("Marubozu Bear","BEAR","Nến đỏ thân đầy – lực bán áp đảo hoàn toàn")
+
+    # ────────── 2-NẾN ──────────
+    # Bullish Engulfing
+    if cl1 < o1 and cl0 > o0 and cl0 > o1 and o0 < cl1 and bd0 > bd1:
+        add("Bull Engulfing","BULL","Nến xanh nuốt trọn nến đỏ – đảo chiều tăng mạnh")
+
+    # Bearish Engulfing
+    if cl1 > o1 and cl0 < o0 and cl0 < o1 and o0 > cl1 and bd0 > bd1:
+        add("Bear Engulfing","BEAR","Nến đỏ nuốt trọn nến xanh – đảo chiều giảm mạnh")
+
+    # Bullish Harami
+    if cl1 < o1 and cl0 > o0 and cl0 < o1 and o0 > cl1 and bd0 < bd1 * 0.5:
+        add("Bullish Harami","BULL","Nến xanh nhỏ trong bụng nến đỏ lớn – mẫu đảo chiều yếu hơn")
+
+    # Bearish Harami
+    if cl1 > o1 and cl0 < o0 and cl0 > o1 and o0 < cl1 and bd0 < bd1 * 0.5:
+        add("Bearish Harami","BEAR","Nến đỏ nhỏ trong bụng nến xanh lớn – nguy cơ đảo chiều")
+
+    # Piercing Line (cắt qua đường giữa)
+    if (cl1 < o1 and cl0 > o0 and
+        o0 < cl1 and cl0 > (o1 + cl1) / 2 and cl0 < o1):
+        add("Piercing Line","BULL","Nến xanh mở dưới đáy nến đỏ, đóng trên ½ thân nến đỏ")
+
+    # Dark Cloud Cover
+    if (cl1 > o1 and cl0 < o0 and
+        o0 > h1 and cl0 < (o1 + cl1) / 2 and cl0 > o1):
+        add("Dark Cloud Cover","BEAR","Nến đỏ mở trên đỉnh nến xanh, đóng dưới ½ thân nến xanh")
+
+    # Tweezer Bottom
+    if abs(lo0 - lo1) / rg0 < 0.03 and cl1 < o1 and cl0 > o0:
+        add("Tweezer Bottom","BULL","Hai nến chạm cùng đáy – vùng hỗ trợ rất mạnh")
+
+    # Tweezer Top
+    if abs(h0 - h1) / rg0 < 0.03 and cl1 > o1 and cl0 < o0:
+        add("Tweezer Top","BEAR","Hai nến chạm cùng đỉnh – vùng kháng cự rất mạnh")
+
+    # ────────── 3-NẾN ──────────
+    # Morning Star
+    if (cl2 < o2 and bd2/rg2 > 0.5 and
+        bd1/rg1 < 0.3 and
+        cl0 > o0 and cl0 >= (o2 + cl2) / 2):
+        add("Morning Star","BULL","3 nến: đỏ lớn → nhỏ (do dự) → xanh lớn. Đảo chiều tăng mạnh")
+
+    # Evening Star
+    if (cl2 > o2 and bd2/rg2 > 0.5 and
+        bd1/rg1 < 0.3 and
+        cl0 < o0 and cl0 <= (o2 + cl2) / 2):
+        add("Evening Star","BEAR","3 nến: xanh lớn → nhỏ (do dự) → đỏ lớn. Đảo chiều giảm mạnh")
+
+    # Three White Soldiers (3 nến xanh tăng dần)
+    if (cl0>o0 and cl1>o1 and cl2>o2 and
+        cl0>cl1>cl2 and o0>o1>o2 and
+        bd0/rg0>0.6 and bd1/rg1>0.6 and bd2/rg2>0.6):
+        add("Three White Soldiers","BULL","3 nến xanh tăng liên tiếp – xu hướng tăng rất mạnh")
+
+    # Three Black Crows (3 nến đỏ giảm dần)
+    if (cl0<o0 and cl1<o1 and cl2<o2 and
+        cl0<cl1<cl2 and o0<o1<o2 and
+        bd0/rg0>0.6 and bd1/rg1>0.6 and bd2/rg2>0.6):
+        add("Three Black Crows","BEAR","3 nến đỏ giảm liên tiếp – xu hướng giảm rất mạnh")
+
     return patterns
+
 
 def scan_pattern_history(df: pd.DataFrame, lookback: int = 150) -> list:
     res = []; df_s = df.tail(lookback + 5); seen = set()
@@ -309,6 +410,29 @@ def analyze_volume_accumulation(df: pd.DataFrame, window: int = 10) -> dict:
     elif ratio < 0.35: bias, desc = "BEAR", f"Bán áp đảo ({(1-ratio)*100:.0f}%)"
     else: bias, desc = "NEUTRAL", "Cân bằng"
     return {"bias": bias, "desc": desc}
+
+# ══════════════════════════════════════════════════════════════
+# VOLUME ACCUMULATION ANALYSIS
+# ══════════════════════════════════════════════════════════════
+def analyze_volume_accumulation(df: pd.DataFrame, window: int = 10) -> dict:
+    """So sánh tổng volume nến xanh vs đỏ trong N nến gần nhất."""
+    sub = df.tail(window)
+    bull_vol = sub.loc[sub["close"] >= sub["open"], "volume"].sum()
+    bear_vol = sub.loc[sub["close"] <  sub["open"], "volume"].sum()
+    total    = bull_vol + bear_vol + 1e-9
+    ratio    = bull_vol / total
+
+    if ratio > 0.65:   bias, desc = "BULL", f"Mua ({ratio*100:.0f}%) áp đảo Bán ({(1-ratio)*100:.0f}%)"
+    elif ratio < 0.35: bias, desc = "BEAR", f"Bán ({(1-ratio)*100:.0f}%) áp đảo Mua ({ratio*100:.0f}%)"
+    else:              bias, desc = "NEUTRAL", f"Cân bằng (Mua {ratio*100:.0f}% / Bán {(1-ratio)*100:.0f}%)"
+
+    # Nến lớn gần nhất
+    avg_vol = float(df["vol_ma"].iloc[-1]) if not np.isnan(df["vol_ma"].iloc[-1]) else 1
+    last_vol_ratio = float(df["volume"].iloc[-1]) / max(avg_vol, 1)
+
+    return {"bull_vol": bull_vol, "bear_vol": bear_vol, "ratio": ratio,
+            "bias": bias, "desc": desc, "last_vol_ratio": last_vol_ratio}
+
 
 # ══════════════════════════════════════════════════════════════
 # ENGINES CHÍNH (CONFLUENCE, FORECAST, WINRATE, REGIME)
@@ -407,34 +531,80 @@ def compute_winrate() -> dict:
     pf = gross_profit/gross_loss
     exp = (win_rate/100*avg_win) + ((1-win_rate/100)*avg_loss)
     
-    br, bd, bs = {}, {}, {}
+ # ── Phân tích theo Regime ──
+    by_regime = {}
     for t in closed:
-        r, d, sc = t.get("regime","?"), t.get("direction","?"), t.get("score",0)
-        bucket = "Score ≥70" if abs(sc)>=70 else ("Score 40-69" if abs(sc)>=40 else "Score <40")
-        for dic, key in [(br,r), (bd,d), (bs,bucket)]:
-            if key not in dic: dic[key] = {"wins":0,"total":0,"pnl":0}
-            dic[key]["total"]+=1; dic[key]["pnl"]+=t.get("pnl_points",0)
-            if t.get("pnl_points",0)>0: dic[key]["wins"]+=1
-    for dic in [br,bd,bs]:
-        for k in dic: dic[k]["wr"] = dic[k]["wins"]/dic[k]["total"]*100
+        r = t.get("regime", "Không rõ") or "Không rõ"
+        if r not in by_regime:
+            by_regime[r] = {"wins": 0, "total": 0, "pnl": 0}
+        by_regime[r]["total"] += 1
+        by_regime[r]["pnl"]   += t.get("pnl_points", 0)
+        if t.get("pnl_points", 0) > 0:
+            by_regime[r]["wins"] += 1
+    for r in by_regime:
+        by_regime[r]["wr"] = by_regime[r]["wins"] / by_regime[r]["total"] * 100
 
-    sc = sorted(closed, key=lambda x: x.get("exit_time","")); eq, run, peak, mdd, mcl, ccl = [], 0.0, 0.0, 0.0, 0, 0
-    for t in sc:
-        run += t.get("pnl_points",0); eq.append({"label":f"#{t['id']}","eq":run})
-        if run>peak: peak=run
-        mdd = max(mdd, peak-run)
-        if t.get("pnl_points",0)<=0: ccl+=1; mcl=max(mcl,ccl)
-        else: ccl=0
-    return {"total":len(closed),"wins":len(wins),"losses":len(losses),"win_rate":win_rate,"total_pnl":total_pnl,"avg_win":avg_win,"avg_loss":avg_loss,"expectancy":exp,"profit_factor":pf,"by_regime":br,"by_direction":bd,"by_signal":bs,"equity_curve":eq,"max_drawdown":mdd,"consecutive_losses":mcl}
+    # ── Phân tích theo Hướng lệnh ──
+    by_direction = {}
+    for t in closed:
+        d = t.get("direction", "?")
+        if d not in by_direction:
+            by_direction[d] = {"wins": 0, "total": 0, "pnl": 0}
+        by_direction[d]["total"] += 1
+        by_direction[d]["pnl"]   += t.get("pnl_points", 0)
+        if t.get("pnl_points", 0) > 0:
+            by_direction[d]["wins"] += 1
+    for d in by_direction:
+        by_direction[d]["wr"] = by_direction[d]["wins"] / by_direction[d]["total"] * 100
 
-def detect_regime(df: pd.DataFrame) -> dict:
-    last = df.iloc[-1]
-    g = lambda col, d=0: float(last.get(col,d)) if not np.isnan(last.get(col,d)) else float(d)
-    adx, dip, din, bbw = g("adx",20), g("di_pos",20), g("di_neg",20), g("bb_width",0.03)
-    hist_bw = df["bb_width"].dropna().tail(50); sqz_thresh = hist_bw.quantile(0.15) if len(hist_bw)>10 else 0.0
-    r = "SIDEWAY" if adx<22 else ("UPTREND" if dip>din else "DOWNTREND")
-    s = "YẾU" if adx<18 else ("MẠNH" if adx>35 else "VỪA")
-    return {"regime":r,"strength":s,"adx":adx,"di_pos":dip,"di_neg":din,"rsi":g("rsi",50),"ema9":g("ema9"),"ema21":g("ema21"),"bb_w":bbw,"sqz_thresh":sqz_thresh,"is_sqz":bbw<sqz_thresh,"atr":g("atr",2)}
+    # ── Phân tích theo Nguồn tín hiệu (score range) ──
+    by_signal = {}
+    for t in closed:
+        sc = t.get("score", 0)
+        if   abs(sc) >= 70: bucket = "Score ≥70 (Mạnh)"
+        elif abs(sc) >= 40: bucket = "Score 40-69 (Vừa)"
+        else:               bucket = "Score <40 (Yếu)"
+        if bucket not in by_signal:
+            by_signal[bucket] = {"wins": 0, "total": 0, "pnl": 0}
+        by_signal[bucket]["total"] += 1
+        by_signal[bucket]["pnl"]   += t.get("pnl_points", 0)
+        if t.get("pnl_points", 0) > 0:
+            by_signal[bucket]["wins"] += 1
+    for b in by_signal:
+        by_signal[b]["wr"] = by_signal[b]["wins"] / by_signal[b]["total"] * 100
+
+    # ── Equity Curve ──
+    sorted_closed = sorted(closed, key=lambda x: x.get("exit_time", "00:00:00"))
+    running = 0.0; equity_curve = []
+    for t in sorted_closed:
+        running += t.get("pnl_points", 0)
+        equity_curve.append({"label": f"#{t['id']}", "eq": running})
+
+    # ── Max Drawdown ──
+    peak = 0.0; max_dd = 0.0
+    for pt in equity_curve:
+        if pt["eq"] > peak: peak = pt["eq"]
+        dd = peak - pt["eq"]
+        if dd > max_dd: max_dd = dd
+
+    # ── Chuỗi thua liên tiếp ──
+    max_consec = cur_consec = 0
+    for t in sorted_closed:
+        if t.get("pnl_points", 0) <= 0:
+            cur_consec += 1
+            max_consec  = max(max_consec, cur_consec)
+        else:
+            cur_consec = 0
+
+    return {
+        "total": len(closed), "wins": len(wins), "losses": len(losses),
+        "win_rate": win_rate, "total_pnl": total_pnl, "avg_win": avg_win,
+        "avg_loss": avg_loss, "expectancy": expectancy, "profit_factor": profit_factor,
+        "by_regime": by_regime, "by_direction": by_direction, "by_signal": by_signal,
+        "equity_curve": equity_curve, "max_drawdown": max_dd,
+        "consecutive_losses": max_consec,
+    }
+
 
 # ══════════════════════════════════════════════════════════════
 # CHART & ALERTS
